@@ -1,0 +1,233 @@
+"""
+Extrai compatibilidade SKU x Embalagem do faturamento histórico.
+
+Cria dataset de compatibilidade baseado nas combinações que já foram vendidas.
+"""
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import re
+
+def extrair_embalagem_descricao(descricao: str) -> str:
+    """
+    Extrai padrão de embalagem da descrição do item.
+    
+    Exemplos:
+    - "OVO MANTIQUEIRA GR BRCO CX 12 BJ 30 UN" -> "CX 12 BJ 30 UN"
+    - "OVO BRANCO JUMBO GRANEL MANTIQUEIRA CX COM 12 BJ DE 30 UN" -> "CX 12 BJ 30 UN"
+    - "2000211 - OVO MANTIQUEIRA GR BRCO CX 12 BJ 30 UN" -> "CX 12 BJ 30 UN"
+    """
+    if pd.isna(descricao):
+        return None
+    
+    desc_upper = str(descricao).upper()
+    
+    # Padrão 1: CX COM [número] BJ DE [número] UN (mais comum no faturamento)
+    # Ex: "CX COM 12 BJ DE 30 UN"
+    padrao1 = r'CX\s+COM\s+(\d+)\s+BJ\s+DE\s+(\d+)(?:\s+UN)?'
+    match = re.search(padrao1, desc_upper)
+    if match:
+        num_bj = match.group(1)
+        num_un = match.group(2)
+        return f"CX {num_bj} BJ {num_un} UN"
+    
+    # Padrão 2: CX [número] BJ [número] UN (sem COM/DE)
+    # Ex: "CX 12 BJ 30 UN"
+    padrao2 = r'CX\s+(\d+)\s+BJ\s+(\d+)(?:\s+UN)?'
+    match = re.search(padrao2, desc_upper)
+    if match:
+        num_bj = match.group(1)
+        num_un = match.group(2)
+        return f"CX {num_bj} BJ {num_un} UN"
+    
+    # Padrão 3: CX [número] BJ DE [número] UN
+    # Ex: "CX 12 BJ DE 30 UN"
+    padrao3 = r'CX\s+(\d+)\s+BJ\s+DE\s+(\d+)(?:\s+UN)?'
+    match = re.search(padrao3, desc_upper)
+    if match:
+        num_bj = match.group(1)
+        num_un = match.group(2)
+        return f"CX {num_bj} BJ {num_un} UN"
+    
+    # Padrão 4: CX COM [número] BJ [número] UN (sem DE)
+    # Ex: "CX COM 12 BJ 30 UN"
+    padrao4 = r'CX\s+COM\s+(\d+)\s+BJ\s+(\d+)(?:\s+UN)?'
+    match = re.search(padrao4, desc_upper)
+    if match:
+        num_bj = match.group(1)
+        num_un = match.group(2)
+        return f"CX {num_bj} BJ {num_un} UN"
+    
+    # Padrão 5: CX [número] BJ (sem UN, tentar encontrar UN depois)
+    padrao5 = r'CX\s+(?:COM\s+)?(\d+)\s+BJ'
+    match5 = re.search(padrao5, desc_upper)
+    if match5:
+        num_bj = match5.group(1)
+        # Tentar encontrar quantidade de unidades em qualquer lugar
+        padrao_un = r'(\d+)\s+UN'
+        match_un = re.search(padrao_un, desc_upper)
+        if match_un:
+            num_un = match_un.group(1)
+            return f"CX {num_bj} BJ {num_un} UN"
+        else:
+            # Se não encontrou UN, retornar apenas CX BJ (mas não será válido)
+            return None
+    
+    # Se não encontrou padrão, retornar None
+    return None
+
+def calcular_qtd_embalagem(embalagem: str) -> int:
+    """
+    Calcula quantidade de ovos na embalagem.
+    
+    Exemplo: "CX 12 BJ 30 UN" -> 12 * 30 = 360
+    """
+    if pd.isna(embalagem) or embalagem is None:
+        return None
+    
+    embalagem_upper = str(embalagem).upper()
+    
+    # Padrão: CX [número] BJ [número] UN
+    padrao = r'CX\s+(\d+)\s+BJ\s+(\d+)\s+UN'
+    match = re.search(padrao, embalagem_upper)
+    
+    if match:
+        num_bj = int(match.group(1))
+        num_un = int(match.group(2))
+        return num_bj * num_un
+    
+    return None
+
+def main():
+    print("="*80)
+    print("EXTRAÇÃO DE COMPATIBILIDADE SKU x EMBALAGEM")
+    print("="*80)
+    
+    # Carregar faturamento
+    print("\n[1/3] Carregando faturamento...")
+    path_fat = Path("../manti_fat_2024.parquet")
+    if not path_fat.exists():
+        print(f"[ERRO] Arquivo não encontrado: {path_fat}")
+        return
+    
+    df_fat = pd.read_parquet(path_fat)
+    print(f"  Registros: {len(df_fat):,}")
+    
+    # Detectar coluna de descrição (tentar múltiplas opções)
+    col_desc = None
+    # Prioridade 1: "ITEM -  DESCRIÇÃO"
+    for col in df_fat.columns:
+        if col == 'ITEM -  DESCRIÇÃO' or col == 'ITEM - DESCRIÇÃO':
+            col_desc = col
+            break
+    
+    # Prioridade 2: qualquer coluna com "descri" e "item"
+    if col_desc is None:
+        for col in df_fat.columns:
+            if 'descri' in col.lower() and 'item' in col.lower():
+                col_desc = col
+                break
+    
+    # Prioridade 3: "Descrição do item"
+    if col_desc is None:
+        for col in df_fat.columns:
+            if col == 'Descrição do item':
+                col_desc = col
+                break
+    
+    if col_desc is None:
+        print("[ERRO] Coluna de descrição não encontrada")
+        print(f"  Colunas disponíveis: {list(df_fat.columns)}")
+        return
+    
+    print(f"  Coluna de descrição: {col_desc}")
+    
+    # Mostrar alguns exemplos para debug
+    print(f"\n  Exemplos de descrições (primeiras 5):")
+    exemplos = df_fat[col_desc].dropna().head(5).tolist()
+    for i, ex in enumerate(exemplos, 1):
+        print(f"    {i}. {ex}")
+    
+    # Extrair embalagem
+    print("\n[2/3] Extraindo embalagens das descrições...")
+    
+    # Estatísticas antes
+    tem_cx = df_fat[col_desc].str.contains('CX', case=False, na=False).sum()
+    print(f"  Registros com 'CX' na descrição: {tem_cx:,} ({tem_cx/len(df_fat)*100:.1f}%)")
+    
+    df_fat['embalagem'] = df_fat[col_desc].apply(extrair_embalagem_descricao)
+    df_fat['qtd_embalagem'] = df_fat['embalagem'].apply(calcular_qtd_embalagem)
+    
+    # Estatísticas após extração
+    embalagens_extraidas = df_fat['embalagem'].notna().sum()
+    print(f"  Embalagens extraídas: {embalagens_extraidas:,} ({embalagens_extraidas/len(df_fat)*100:.1f}%)")
+    
+    # Mostrar exemplos de descrições com CX mas sem embalagem extraída (para debug)
+    df_sem_embalagem = df_fat[
+        (df_fat[col_desc].str.contains('CX', case=False, na=False)) &
+        (df_fat['embalagem'].isna())
+    ]
+    if len(df_sem_embalagem) > 0:
+        print(f"\n  [DEBUG] {len(df_sem_embalagem):,} descrições com 'CX' mas sem embalagem extraída")
+        print(f"  Exemplos:")
+        for ex in df_sem_embalagem[col_desc].unique()[:5]:
+            print(f"    - {ex}")
+    
+    # Filtrar apenas registros com embalagem válida
+    df_validos = df_fat[
+        (df_fat['embalagem'].notna()) &
+        (df_fat['qtd_embalagem'].notna()) &
+        (df_fat['item'].notna()) &
+        (df_fat['Quantidade'] > 0)
+    ].copy()
+    
+    print(f"\n  Registros com embalagem válida: {len(df_validos):,} ({len(df_validos)/len(df_fat)*100:.1f}%)")
+    
+    # Agregar por (item, embalagem) para criar compatibilidade
+    print("\n[3/3] Criando dataset de compatibilidade...")
+    df_compat = df_validos.groupby(['item', 'embalagem']).agg({
+        'Quantidade': 'sum',
+        'Receita Liquida': 'sum',
+        col_desc: 'first'
+    }).reset_index()
+    
+    df_compat['qtd_embalagem'] = df_compat['embalagem'].apply(calcular_qtd_embalagem)
+    
+    # Adicionar informações do SKU
+    df_compat = df_compat.rename(columns={
+        col_desc: 'descricao_item',
+        'Quantidade': 'volume_total_vendido',
+        'Receita Liquida': 'receita_total'
+    })
+    
+    # Ordenar por volume
+    df_compat = df_compat.sort_values('volume_total_vendido', ascending=False)
+    
+    # Salvar
+    output_path = Path("inputs/compatibilidade_sku_embalagem.csv")
+    output_path.parent.mkdir(exist_ok=True)
+    df_compat.to_csv(output_path, index=False, encoding='utf-8')
+    
+    print(f"\n[OK] Dataset salvo: {output_path}")
+    print(f"  Combinações únicas: {len(df_compat):,}")
+    print(f"  SKUs únicos: {df_compat['item'].nunique():,}")
+    print(f"  Embalagens únicas: {df_compat['embalagem'].nunique():,}")
+    
+    # Estatísticas
+    print("\n" + "="*80)
+    print("ESTATÍSTICAS")
+    print("="*80)
+    print(f"\nTop 10 combinações por volume:")
+    print(df_compat.head(10)[['item', 'embalagem', 'qtd_embalagem', 'volume_total_vendido']].to_string(index=False))
+    
+    print(f"\nEmbalagens mais comuns:")
+    embalagens_count = df_compat.groupby('embalagem').agg({
+        'item': 'nunique',
+        'volume_total_vendido': 'sum'
+    }).sort_values('volume_total_vendido', ascending=False)
+    embalagens_count.columns = ['num_skus', 'volume_total']
+    print(embalagens_count.head(10).to_string())
+
+if __name__ == "__main__":
+    main()
+

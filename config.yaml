@@ -1,0 +1,117 @@
+# Configuração do Modelo de Otimização de Mix Diário
+# Data: 2024-12-08
+# Versão: 1.0
+
+# ==============================================================================
+# CAMINHOS DOS ARQUIVOS
+# ==============================================================================
+paths:
+  # Arquivos de entrada (relativos à raiz do projeto)
+  estoque: "../manti_estoque.parquet"
+  classes: "../base_skus_classes.xlsx"  # Classificacao de SKUs por classe
+  compatibilidade: "inputs/compatibilidade_sku_embalagem.csv"  # Histórico
+  # compatibilidade_tecnica: "inputs/compatibilidade_tecnica_sku_embalagem.csv"  # Técnica (opcional)
+  precos: "inputs/precos_sku_embalagem.csv"
+  custos: "../CUSTO ITEM.csv"
+  # custo_embalagem: "inputs/custo_embalagem.csv"  # Opcional
+  
+  # Arquivos de saída
+  output_dir: "resultados"
+  logs_dir: "logs"
+
+# ==============================================================================
+# PARÂMETROS DO SOLVER (OR-Tools)
+# ==============================================================================
+solver:
+  # Tipo de solver
+  solver_type: "SCIP_MIXED_INTEGER_PROGRAMMING"  # OR-Tools padrão
+  
+  # Limites de tempo e gap
+  time_limit_seconds: 600  # 10 minutos (ajustar conforme necessário)
+  time_limit_ms: 600000    # 10 minutos em milissegundos
+  gap_percentage: 0.01     # 1% de gap de otimalidade
+  
+  # Paralelização
+  num_threads: 4           # Usar 4 threads (ajustar conforme CPU)
+  
+  # Logging
+  verbose: true            # Mostrar progresso do solver
+  
+  # Tolerâncias numéricas
+  primal_tolerance: 1.0e-7
+  dual_tolerance: 1.0e-7
+
+# ==============================================================================
+# PARÂMETROS DE PREPARAÇÃO DE DADOS
+# ==============================================================================
+dados:
+  # Data do estoque a considerar
+  data_estoque: "2025-08-19"  # Data com maior estoque (71.873 unidades)
+  
+  # Tipo de estoque
+  tipo_estoque: "DISPONIVEL PARA VENDA"  # Ajustar conforme necessário
+  
+  # Filtros de qualidade de dados
+  sku_minimo_transacoes: 1      # Mínimo de transações para considerar SKU
+  
+  # Tratamento de outliers
+  remover_outliers_preco: true
+  percentil_inferior_preco: 1   # Remover 1% menores preços
+  percentil_superior_preco: 99  # Remover 1% maiores preços
+
+# ==============================================================================
+# PARÂMETROS DE NEGÓCIO
+# ==============================================================================
+negocio:
+  # Margem mínima
+  margem_minima_percentual: 0.0 # 0% = aceita qualquer margem positiva
+  filtrar_skus_margem_negativa: true  # Remover SKUs com margem negativa
+
+# ==============================================================================
+# PARÂMETROS DO MODELO
+# ==============================================================================
+modelo:
+  # Tipo de variáveis
+  variaveis_continuas: true     # true = LP relaxado, false = MILP puro
+  
+  # Objetivo
+  maximizar_margem_absoluta: true      # true = R$, false = %
+  
+  # Restrições opcionais
+  escoar_todo_estoque: false   # Se true, força escoar pelo menos 95% do estoque
+  
+  # Realocação entre SKUs da mesma classe
+  limite_realocacao: 2.0  # SKU pode receber até 2x seu estoque original (1.0 = sem realocação)
+
+# ==============================================================================
+# PARÂMETROS DE ANÁLISE DE RESULTADOS
+# ==============================================================================
+analise:
+  # Top N
+  top_n_combinations: 20       # Top 20 combinações por margem
+  
+  # Agrupamentos para análise
+  agrupar_por_embalagem: true
+  agrupar_por_sku: true
+
+# ==============================================================================
+# MODO DEBUG
+# ==============================================================================
+debug:
+  ativar: false                        # Ativar modo debug
+  salvar_modelo_mps: false             # Exportar modelo em formato MPS
+  salvar_modelo_lp: false               # Exportar modelo em formato LP
+  limitar_skus: null                    # null ou número (ex: 50 para testar)
+  seed_random: 42                      # Seed para reprodutibilidade
+
+# ==============================================================================
+# VERSIONAMENTO
+# ==============================================================================
+meta:
+  versao_modelo: "1.0"
+  data_criacao: "2024-12-08"
+  autor: "7D"
+  descricao: "Modelo de otimização de mix diário (SKU x Embalagem) sem clientes"
+  changelog:
+    - "2024-12-08: Versão inicial - mix diário sem clientes"
+
