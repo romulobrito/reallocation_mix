@@ -9,6 +9,7 @@ paths:
   # Arquivos de entrada (relativos à raiz do projeto)
   estoque: "../manti_estoque.parquet"
   classes: "../base_skus_classes.xlsx"  # Classificacao de SKUs por classe
+  pedidos: "inputs/pedidos_clientes.csv"  # Pedidos de clientes (pode ser parcial)
   compatibilidade: "inputs/compatibilidade_sku_embalagem.csv"  # Histórico
   # compatibilidade_tecnica: "inputs/compatibilidade_tecnica_sku_embalagem.csv"  # Técnica (opcional)
   precos: "inputs/precos_sku_embalagem.csv"
