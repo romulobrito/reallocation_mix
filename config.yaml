@@ -83,6 +83,14 @@ modelo:
   
   # Realocação entre SKUs da mesma classe
   limite_realocacao: 2.0  # SKU pode receber até 2x seu estoque original (1.0 = sem realocação)
+  
+  # Controle de volume para otimização
+  # IMPORTANTE: 
+  # - Se atender_pedidos=true, SEMPRE usa excedente (estoque - pedidos), independente desta flag
+  # - Se atender_pedidos=false, esta flag controla se usa excedente ou estoque total
+  # - Se atender_pedidos=false E usar_apenas_excedente=true, sera ajustado automaticamente para false
+  usar_apenas_excedente: true  # So faz diferenca quando atender_pedidos=false
+  atender_pedidos: true  # true = atende pedidos com prioridade, false = ignora pedidos completamente
 
 # ==============================================================================
 # PARÂMETROS DE ANÁLISE DE RESULTADOS

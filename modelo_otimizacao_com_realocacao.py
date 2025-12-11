@@ -338,24 +338,69 @@ class ModeloOtimizacaoComRealocacao:
         )
         df_base['quantidade_total_pedida'] = df_base['quantidade_total_pedida'].fillna(0)
         
+        # Ler flags de configuracao
+        usar_apenas_excedente = self.config.get('modelo', {}).get('usar_apenas_excedente', True)
+        atender_pedidos = self.config.get('modelo', {}).get('atender_pedidos', True)
+        
+        # Validacao e ajuste de flags
+        # Se atender_pedidos = True, SEMPRE usa excedente (nao pode "roubar" dos pedidos)
+        # A flag usar_apenas_excedente so faz diferenca quando atender_pedidos = False
+        if atender_pedidos:
+            # Quando atende pedidos, excedente = estoque - pedidos (ja calculado acima)
+            # Nao faz sentido usar estoque total, pois isso permitiria "roubar" dos pedidos
+            usar_apenas_excedente = True
+            self.logger.info("\n[INFO] Como atender_pedidos=true, usando apenas excedente (estoque - pedidos)")
+        elif not atender_pedidos and usar_apenas_excedente:
+            # Se nao atender pedidos e usar_apenas_excedente=true, nao faz sentido
+            # (excedente = estoque - pedidos, se nao ha pedidos, excedente = estoque total)
+            self.logger.warning("\n[AVISO] Combinacao invalida detectada:")
+            self.logger.warning("  usar_apenas_excedente=true + atender_pedidos=false")
+            self.logger.warning("  Se nao ha pedidos, excedente = estoque total.")
+            self.logger.warning("  Ajustando para usar_apenas_excedente=false automaticamente.")
+            usar_apenas_excedente = False
+        
         # Calcular estoque excedente por SKU (apos atender pedidos)
         # O atendimento pode ser parcial, entao: excedente = estoque - min(pedido, estoque)
-        df_base['estoque_excedente_sku'] = df_base.apply(
-            lambda row: max(0, row['estoque_disponivel'] - min(row['quantidade_total_pedida'], row['estoque_disponivel'])),
-            axis=1
-        )
+        # Se nao atender pedidos, excedente = estoque total
+        if atender_pedidos:
+            df_base['estoque_excedente_sku'] = df_base.apply(
+                lambda row: max(0, row['estoque_disponivel'] - min(row['quantidade_total_pedida'], row['estoque_disponivel'])),
+                axis=1
+            )
+        else:
+            # Se nao atender pedidos, todo estoque esta disponivel para otimizacao
+            df_base['estoque_excedente_sku'] = df_base['estoque_disponivel']
         
         # Calcular estoque total por classe (para restricao de realocacao)
         estoque_por_classe = df_estoque.groupby('classe')['estoque_disponivel'].sum()
         df_base['estoque_classe'] = df_base['classe'].map(estoque_por_classe)
         
-        # Calcular estoque EXCEDENTE por classe (apos atender pedidos)
-        # Para cada classe, soma o estoque excedente de todos os SKUs únicos
-        # Primeiro, pegar estoque excedente único por (classe, item)
-        estoque_excedente_por_item = df_base.groupby(['classe', 'item'])['estoque_excedente_sku'].first()
-        # Depois, somar por classe
-        estoque_excedente_por_classe = estoque_excedente_por_item.groupby(level=0).sum()
-        df_base['estoque_excedente_classe'] = df_base['classe'].map(estoque_excedente_por_classe).fillna(0)
+        # Calcular estoque disponivel para otimizacao por classe
+        # IMPORTANTE: Se atender_pedidos = True, SEMPRE usa excedente (estoque - pedidos)
+        # A flag usar_apenas_excedente so faz diferenca quando atender_pedidos = False
+        if atender_pedidos:
+            # Se atende pedidos, SEMPRE usa excedente (nao pode "roubar" dos pedidos)
+            # Excedente = estoque - pedidos (ja calculado acima)
+            estoque_excedente_por_item = df_base.groupby(['classe', 'item'])['estoque_excedente_sku'].first()
+            estoque_excedente_por_classe = estoque_excedente_por_item.groupby(level=0).sum()
+            df_base['estoque_disponivel_otimizacao_classe'] = df_base['classe'].map(estoque_excedente_por_classe).fillna(0)
+        else:
+            # Se NAO atende pedidos, pode escolher entre excedente ou total
+            # Mas se nao ha pedidos, excedente = estoque total (ja ajustado acima)
+            if usar_apenas_excedente:
+                # Usar excedente (que e igual ao estoque total quando nao ha pedidos)
+                estoque_excedente_por_item = df_base.groupby(['classe', 'item'])['estoque_excedente_sku'].first()
+                estoque_excedente_por_classe = estoque_excedente_por_item.groupby(level=0).sum()
+                df_base['estoque_disponivel_otimizacao_classe'] = df_base['classe'].map(estoque_excedente_por_classe).fillna(0)
+            else:
+                # Usar estoque TOTAL da classe para otimizacao
+                df_base['estoque_disponivel_otimizacao_classe'] = df_base['estoque_classe']
+                # Criar estoque_excedente_por_classe baseado no estoque total (para compatibilidade)
+                estoque_total_por_item = df_base.groupby(['classe', 'item'])['estoque_disponivel'].first()
+                estoque_excedente_por_classe = estoque_total_por_item.groupby(level=0).sum()
+        
+        # Manter compatibilidade com codigo antigo
+        df_base['estoque_excedente_classe'] = df_base['estoque_disponivel_otimizacao_classe']
         
         self.logger.info(f"  Combinacoes validas: {len(df_base)}")
         self.logger.info(f"  SKUs validos: {df_base['item'].nunique()}")
@@ -393,9 +438,25 @@ class ModeloOtimizacaoComRealocacao:
                                f"diff margem R$ {row['diff_margem']:.2f}, "
                                f"potencial R$ {row['potencial_ganho']:,.0f}")
         
+        # Log do modo de operacao
+        modo_operacao = []
+        if atender_pedidos:
+            modo_operacao.append("ATENDE PEDIDOS")
+        else:
+            modo_operacao.append("IGNORA PEDIDOS")
+        
+        if usar_apenas_excedente:
+            modo_operacao.append("OTIMIZA APENAS EXCEDENTE")
+        else:
+            modo_operacao.append("OTIMIZA TODO ESTOQUE")
+        
+        self.logger.info(f"\n  MODO DE OPERACAO: {' + '.join(modo_operacao)}")
+        
         self.dados['base_otimizacao'] = df_base
         self.dados['estoque_por_classe'] = estoque_por_classe
         self.dados['estoque_excedente_por_classe'] = estoque_excedente_por_classe
+        self.dados['usar_apenas_excedente'] = usar_apenas_excedente
+        self.dados['atender_pedidos'] = atender_pedidos
     
     def criar_modelo(self):
         """Cria o modelo de otimizacao com realocacao."""
@@ -414,11 +475,12 @@ class ModeloOtimizacaoComRealocacao:
         # 2. x[item, embalagem] = quantidade alocada no excedente (para otimizacao)
         self.logger.info("\n[1/4] Criando variaveis de decisao...")
         
-        # Variaveis de atendimento aos pedidos
+        # Variaveis de atendimento aos pedidos (apenas se atender_pedidos = True)
         self.variaveis_pedidos = {}
+        atender_pedidos = self.dados.get('atender_pedidos', True)
         df_pedidos_sku = self.dados.get('pedidos_por_sku', pd.DataFrame(columns=['item', 'quantidade_total_pedida']))
         
-        if len(df_pedidos_sku) > 0:
+        if atender_pedidos and len(df_pedidos_sku) > 0:
             for _, row in df_pedidos_sku.iterrows():
                 item = int(row['item'])
                 qtd_pedida = float(row['quantidade_total_pedida'])
@@ -434,26 +496,33 @@ class ModeloOtimizacaoComRealocacao:
                         f"y_pedido_{item}"
                     )
         
-        self.logger.info(f"  Variaveis de atendimento aos pedidos: {len(self.variaveis_pedidos)}")
+        if atender_pedidos:
+            self.logger.info(f"  Variaveis de atendimento aos pedidos: {len(self.variaveis_pedidos)}")
+        else:
+            self.logger.info(f"  Variaveis de atendimento aos pedidos: 0 (pedidos ignorados)")
         
-        # Variaveis de alocacao no excedente (para otimizacao com realocacao)
+        # Variaveis de alocacao (para otimizacao com realocacao)
+        # Limite superior depende da flag usar_apenas_excedente
+        usar_apenas_excedente = self.dados.get('usar_apenas_excedente', True)
         self.variaveis = {}
+        
         for idx, row in df_base.iterrows():
             item = row['item']
             emb = row['embalagem']
             var_name = f"x_{item}_{emb}"
             
-            # Limite superior: estoque EXCEDENTE da CLASSE (apos atender pedidos)
-            estoque_excedente_classe = row['estoque_excedente_classe']
+            # Limite superior: estoque disponivel para otimizacao da CLASSE
+            estoque_disponivel_classe = row['estoque_disponivel_otimizacao_classe']
             
-            if estoque_excedente_classe > 0:
+            if estoque_disponivel_classe > 0:
                 self.variaveis[(item, emb)] = self.solver.NumVar(
                     0,
-                    estoque_excedente_classe,  # IMPORTANTE: limite e o estoque EXCEDENTE da classe
+                    estoque_disponivel_classe,
                     var_name
                 )
         
-        self.logger.info(f"  Variaveis de alocacao no excedente: {len(self.variaveis)}")
+        modo_desc = "excedente" if usar_apenas_excedente else "todo estoque"
+        self.logger.info(f"  Variaveis de alocacao (otimizacao do {modo_desc}): {len(self.variaveis)}")
         
         # Adicionar restricoes
         self._adicionar_restricoes(df_base)
@@ -469,11 +538,11 @@ class ModeloOtimizacaoComRealocacao:
         
         num_restricoes = 0
         
-        # RESTRICAO 1: Atendimento aos pedidos (pode ser parcial)
-        # Para cada SKU com pedido: atendimento <= min(pedido, estoque)
+        # RESTRICAO 1: Atendimento aos pedidos (apenas se atender_pedidos = True)
+        atender_pedidos = self.dados.get('atender_pedidos', True)
         df_pedidos_sku = self.dados.get('pedidos_por_sku', pd.DataFrame(columns=['item', 'quantidade_total_pedida']))
         
-        if len(df_pedidos_sku) > 0:
+        if atender_pedidos and len(df_pedidos_sku) > 0:
             for _, row in df_pedidos_sku.iterrows():
                 item = row['item']
                 qtd_pedida = row['quantidade_total_pedida']
@@ -487,12 +556,17 @@ class ModeloOtimizacaoComRealocacao:
                     self.solver.Add(self.variaveis_pedidos[item] <= limite_atendimento)
                     num_restricoes += 1
         
-        self.logger.info(f"  Restricoes de atendimento aos pedidos: {num_restricoes}")
+        if atender_pedidos:
+            self.logger.info(f"  Restricoes de atendimento aos pedidos: {num_restricoes}")
+        else:
+            self.logger.info(f"  Restricoes de atendimento aos pedidos: 0 (pedidos ignorados)")
         
-        # RESTRICAO 2: Volume total no EXCEDENTE por CLASSE <= estoque excedente da classe
-        # Esta e a restricao que permite realocacao entre SKUs no excedente!
+        # RESTRICAO 2: Volume total por CLASSE <= estoque disponivel da classe
+        # Esta e a restricao que permite realocacao entre SKUs!
+        usar_apenas_excedente = self.dados.get('usar_apenas_excedente', True)
         classes = df_base['classe'].unique()
         
+        num_restricoes_classe = 0
         for classe in classes:
             # Todas as variaveis de SKUs desta classe
             items_classe = df_base[df_base['classe'] == classe][['item', 'embalagem']].drop_duplicates()
@@ -500,26 +574,30 @@ class ModeloOtimizacaoComRealocacao:
             if len(items_classe) == 0:
                 continue
             
-            # Soma de todas as alocacoes no EXCEDENTE da classe
-            soma_excedente_classe = sum(
+            # Soma de todas as alocacoes da classe
+            soma_classe = sum(
                 self.variaveis.get((row['item'], row['embalagem']), 0)
                 for _, row in items_classe.iterrows()
                 if (row['item'], row['embalagem']) in self.variaveis
             )
             
-            # Estoque EXCEDENTE da classe (apos atender pedidos)
-            estoque_excedente_classe = self.dados['estoque_excedente_por_classe'].get(classe, 0)
+            # Estoque disponivel para otimizacao da classe
+            estoque_disponivel_classe = df_base[df_base['classe'] == classe]['estoque_disponivel_otimizacao_classe'].iloc[0] if len(df_base[df_base['classe'] == classe]) > 0 else 0
             
-            if estoque_excedente_classe > 0:
-                self.solver.Add(soma_excedente_classe <= estoque_excedente_classe)
-                num_restricoes += 1
+            if estoque_disponivel_classe > 0:
+                self.solver.Add(soma_classe <= estoque_disponivel_classe)
+                num_restricoes_classe += 1
         
-        self.logger.info(f"  Restricoes de estoque EXCEDENTE por CLASSE: {num_restricoes - len(df_pedidos_sku) if len(df_pedidos_sku) > 0 else num_restricoes}")
+        num_restricoes += num_restricoes_classe
+        modo_desc = "EXCEDENTE" if usar_apenas_excedente else "TOTAL"
+        self.logger.info(f"  Restricoes de estoque {modo_desc} por CLASSE: {num_restricoes_classe}")
         
-        # RESTRICAO 3: Para cada SKU, limite de alocacao no excedente
-        # Limita a "absorcao" de volume excedente de outros SKUs
+        # RESTRICAO 3: Para cada SKU, limite de alocacao
+        # Limita a "absorcao" de volume de outros SKUs
+        usar_apenas_excedente = self.dados.get('usar_apenas_excedente', True)
         items_unicos = df_base['item'].unique()
         
+        num_restricoes_sku = 0
         for item in items_unicos:
             # Todas as embalagens deste item
             embalagens_item = df_base[df_base['item'] == item]['embalagem'].unique()
@@ -527,24 +605,26 @@ class ModeloOtimizacaoComRealocacao:
             if len(embalagens_item) <= 1:
                 continue
             
-            # Estoque excedente original do item (apos atender pedidos)
-            estoque_excedente_item = df_base[df_base['item'] == item]['estoque_excedente_sku'].iloc[0] if len(df_base[df_base['item'] == item]) > 0 else 0
+            # Estoque base do item (excedente ou total, dependendo da flag)
+            estoque_base_item = df_base[df_base['item'] == item]['estoque_excedente_sku'].iloc[0] if len(df_base[df_base['item'] == item]) > 0 else 0
             
-            if estoque_excedente_item <= 0:
+            if estoque_base_item <= 0:
                 continue
             
-            soma_item_excedente = sum(
+            soma_item = sum(
                 self.variaveis.get((item, emb), 0)
                 for emb in embalagens_item
                 if (item, emb) in self.variaveis
             )
             
-            # Permite receber ate 2x o estoque excedente original (realocacao moderada)
+            # Permite receber ate 2x o estoque base original (realocacao moderada)
             limite_realocacao = self.config.get('modelo', {}).get('limite_realocacao', 2.0)
-            self.solver.Add(soma_item_excedente <= estoque_excedente_item * limite_realocacao)
-            num_restricoes += 1
+            self.solver.Add(soma_item <= estoque_base_item * limite_realocacao)
+            num_restricoes_sku += 1
         
-        self.logger.info(f"  Restricoes de limite por SKU (no excedente): {num_restricoes - (len(classes) + (len(df_pedidos_sku) if len(df_pedidos_sku) > 0 else 0))}")
+        num_restricoes += num_restricoes_sku
+        modo_desc = "excedente" if usar_apenas_excedente else "total"
+        self.logger.info(f"  Restricoes de limite por SKU (no {modo_desc}): {num_restricoes_sku}")
         self.logger.info(f"  Total de restricoes: {num_restricoes}")
     
     def _definir_objetivo(self, df_base: pd.DataFrame):
@@ -556,9 +636,10 @@ class ModeloOtimizacaoComRealocacao:
         # 2. Margem da otimizacao no excedente
         
         objetivo_pedidos = 0.0
+        atender_pedidos = self.dados.get('atender_pedidos', True)
         df_pedidos_sku = self.dados.get('pedidos_por_sku', pd.DataFrame(columns=['item', 'quantidade_total_pedida']))
         
-        if len(df_pedidos_sku) > 0:
+        if atender_pedidos and len(df_pedidos_sku) > 0:
             for _, row in df_pedidos_sku.iterrows():
                 item = row['item']
                 if item in self.variaveis_pedidos:
@@ -577,8 +658,11 @@ class ModeloOtimizacaoComRealocacao:
         self.solver.Maximize(objetivo_total)
         
         # Estimar margem potencial
+        atender_pedidos = self.dados.get('atender_pedidos', True)
+        usar_apenas_excedente = self.dados.get('usar_apenas_excedente', True)
+        
         margem_potencial_pedidos = 0.0
-        if len(df_pedidos_sku) > 0:
+        if atender_pedidos and len(df_pedidos_sku) > 0:
             for _, row in df_pedidos_sku.iterrows():
                 item = row['item']
                 qtd_pedida = row['quantidade_total_pedida']
@@ -586,11 +670,20 @@ class ModeloOtimizacaoComRealocacao:
                 margem_item = df_base[df_base['item'] == item]['margem_unitaria'].iloc[0] if len(df_base[df_base['item'] == item]) > 0 else 0
                 margem_potencial_pedidos += margem_item * min(qtd_pedida, estoque_item)
         
-        margem_potencial_excedente = (df_base['margem_unitaria'] * df_base['estoque_excedente_sku']).sum()
-        margem_potencial_total = margem_potencial_pedidos + margem_potencial_excedente
+        # Calcular margem potencial da otimizacao
+        if usar_apenas_excedente:
+            estoque_otimizacao = df_base['estoque_excedente_sku']
+            modo_desc = "excedente"
+        else:
+            estoque_otimizacao = df_base['estoque_disponivel']
+            modo_desc = "total"
         
-        self.logger.info(f"  Margem potencial pedidos: R$ {margem_potencial_pedidos:,.2f}")
-        self.logger.info(f"  Margem potencial excedente (sem realocacao): R$ {margem_potencial_excedente:,.2f}")
+        margem_potencial_otimizacao = (df_base['margem_unitaria'] * estoque_otimizacao).sum()
+        margem_potencial_total = margem_potencial_pedidos + margem_potencial_otimizacao
+        
+        if atender_pedidos:
+            self.logger.info(f"  Margem potencial pedidos: R$ {margem_potencial_pedidos:,.2f}")
+        self.logger.info(f"  Margem potencial {modo_desc} (sem realocacao): R$ {margem_potencial_otimizacao:,.2f}")
         self.logger.info(f"  Margem potencial total: R$ {margem_potencial_total:,.2f}")
     
     def resolver(self):
@@ -791,7 +884,7 @@ class ModeloOtimizacaoComRealocacao:
         }
     
     def salvar_resultados(self):
-        """Salva resultados em CSV e Excel com timestamp."""
+        """Salva resultados em CSV e Excel com timestamp e modo de operacao."""
         if self.resultado is None:
             return
         
@@ -803,13 +896,25 @@ class ModeloOtimizacaoComRealocacao:
         # Gerar timestamp no formato YYYYMMDD_HHMMSS
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         
-        # Resultado detalhado com timestamp
-        arquivo_resultado_csv = output_dir / f'resultado_realocacao_{timestamp}.csv'
-        arquivo_resultado_xlsx = output_dir / f'resultado_realocacao_{timestamp}.xlsx'
+        # Determinar sufixo do modo de operacao
+        atender_pedidos = self.dados.get('atender_pedidos', True)
+        usar_apenas_excedente = self.dados.get('usar_apenas_excedente', True)
+        
+        if atender_pedidos:
+            modo_sufixo = 'excedente'  # Sempre usa excedente quando atende pedidos
+        else:
+            if usar_apenas_excedente:
+                modo_sufixo = 'excedente'  # Ajustado automaticamente, mas mantem para compatibilidade
+            else:
+                modo_sufixo = 'completo'  # Otimiza todo estoque
+        
+        # Resultado detalhado com timestamp e modo
+        arquivo_resultado_csv = output_dir / f'resultado_realocacao_{modo_sufixo}_{timestamp}.csv'
+        arquivo_resultado_xlsx = output_dir / f'resultado_realocacao_{modo_sufixo}_{timestamp}.xlsx'
         
         self.resultado.to_csv(arquivo_resultado_csv, index=False, encoding='utf-8')
         
-        # Resumo por classe com timestamp
+        # Resumo por classe com timestamp e modo
         resumo_classe = self.resultado.groupby('classe').agg({
             'item': 'nunique',
             'quantidade': 'sum',
@@ -818,7 +923,7 @@ class ModeloOtimizacaoComRealocacao:
         }).reset_index()
         resumo_classe.columns = ['classe', 'num_skus', 'quantidade_alocada', 'estoque_original', 'margem_total']
         
-        arquivo_resumo_csv = output_dir / f'resumo_por_classe_{timestamp}.csv'
+        arquivo_resumo_csv = output_dir / f'resumo_por_classe_{modo_sufixo}_{timestamp}.csv'
         resumo_classe.to_csv(arquivo_resumo_csv, index=False, encoding='utf-8')
         
         # Criar Excel com multiplas abas
@@ -834,7 +939,7 @@ class ModeloOtimizacaoComRealocacao:
             df_estatisticas.to_excel(writer, sheet_name='Estatisticas', index=False)
         
         # Salvar resumo por classe separado (para compatibilidade)
-        arquivo_resumo_xlsx = output_dir / f'resumo_por_classe_{timestamp}.xlsx'
+        arquivo_resumo_xlsx = output_dir / f'resumo_por_classe_{modo_sufixo}_{timestamp}.xlsx'
         resumo_classe.to_excel(arquivo_resumo_xlsx, index=False, engine='openpyxl')
         
         self.logger.info(f"\n[OK] Resultados salvos em {output_dir}/")
