@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 import re
+from datetime import datetime
 
 def extrair_embalagem_descricao(descricao: str) -> str:
     """
@@ -203,15 +204,49 @@ def main():
     # Ordenar por volume
     df_compat = df_compat.sort_values('volume_total_vendido', ascending=False)
     
-    # Salvar
+    # Adicionar timestamp e metadados para auditoria
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    # Salvar dataset principal
     output_path = Path("inputs/compatibilidade_sku_embalagem.csv")
     output_path.parent.mkdir(exist_ok=True)
     df_compat.to_csv(output_path, index=False, encoding='utf-8')
+    
+    # Criar relatorio de auditoria
+    relatorio_auditoria = {
+        'data_geracao': [timestamp],
+        'total_registros_faturamento': [len(df_fat)],
+        'registros_com_cx': [tem_cx],
+        'percentual_com_cx': [tem_cx/len(df_fat)*100 if len(df_fat) > 0 else 0],
+        'embalagens_extraidas': [embalagens_extraidas],
+        'percentual_extraido': [embalagens_extraidas/len(df_fat)*100 if len(df_fat) > 0 else 0],
+        'registros_validos': [len(df_validos)],
+        'percentual_validos': [len(df_validos)/len(df_fat)*100 if len(df_fat) > 0 else 0],
+        'combinacoes_unicas': [len(df_compat)],
+        'skus_unicos': [df_compat['item'].nunique()],
+        'embalagens_unicas': [df_compat['embalagem'].nunique()],
+        'volume_total_vendido': [df_compat['volume_total_vendido'].sum()],
+        'receita_total': [df_compat['receita_total'].sum()],
+        'descricoes_nao_capturadas': [len(df_sem_embalagem)]
+    }
+    
+    df_auditoria = pd.DataFrame(relatorio_auditoria)
+    path_auditoria = Path("inputs/compatibilidade_sku_embalagem_auditoria.csv")
+    df_auditoria.to_csv(path_auditoria, index=False, encoding='utf-8')
+    
+    # Salvar exemplos de descricoes nao capturadas para analise
+    if len(df_sem_embalagem) > 0:
+        df_descricoes_nao_capturadas = df_sem_embalagem[[col_desc]].drop_duplicates()
+        df_descricoes_nao_capturadas.columns = ['descricao_nao_capturada']
+        path_descricoes = Path("inputs/descricoes_nao_capturadas.csv")
+        df_descricoes_nao_capturadas.to_csv(path_descricoes, index=False, encoding='utf-8')
+        print(f"\n[INFO] Descricoes nao capturadas salvas: {path_descricoes}")
     
     print(f"\n[OK] Dataset salvo: {output_path}")
     print(f"  Combinações únicas: {len(df_compat):,}")
     print(f"  SKUs únicos: {df_compat['item'].nunique():,}")
     print(f"  Embalagens únicas: {df_compat['embalagem'].nunique():,}")
+    print(f"\n[OK] Relatorio de auditoria salvo: {path_auditoria}")
     
     # Estatísticas
     print("\n" + "="*80)

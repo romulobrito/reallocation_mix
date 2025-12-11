@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 import sys
+from datetime import datetime
 sys.path.append(str(Path(__file__).parent))
 from extrair_compatibilidade_embalagem import extrair_embalagem_descricao, calcular_qtd_embalagem
 
@@ -129,10 +130,42 @@ print(f"  Combinações criadas: {len(df_comp_tecnica)}")
 print(f"  Do histórico: {len(df_comp_tecnica[df_comp_tecnica['fonte'] == 'HISTORICO'])}")
 print(f"  Técnicas (novas): {len(df_comp_tecnica[df_comp_tecnica['fonte'] == 'TECNICA'])}")
 
-# Salvar
+# Adicionar timestamp e metadados para auditoria
+timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+# Salvar dataset principal
 output_path = Path("inputs/compatibilidade_tecnica_sku_embalagem.csv")
 df_comp_tecnica.to_csv(output_path, index=False, encoding='utf-8')
+
+# Criar relatorio de auditoria
+combinacoes_historico = len(df_comp_tecnica[df_comp_tecnica['fonte'] == 'HISTORICO'])
+combinacoes_tecnica = len(df_comp_tecnica[df_comp_tecnica['fonte'] == 'TECNICA'])
+percentual_expansao = (combinacoes_tecnica / combinacoes_historico * 100) if combinacoes_historico > 0 else 0
+
+# Calcular estatisticas de embalagens por SKU
+embalagens_por_sku = df_comp_tecnica.groupby('item').size()
+skus_multiplas = len(embalagens_por_sku[embalagens_por_sku > 1]) if len(embalagens_por_sku) > 0 else 0
+skus_uma = len(embalagens_por_sku[embalagens_por_sku == 1]) if len(embalagens_por_sku) > 0 else 0
+
+relatorio_auditoria = {
+    'data_geracao': [timestamp],
+    'skus_analisados': [len(df_skus)],
+    'embalagens_disponiveis': [len(embalagens_disponiveis)],
+    'combinacoes_totais': [len(df_comp_tecnica)],
+    'combinacoes_historico': [combinacoes_historico],
+    'combinacoes_tecnica': [combinacoes_tecnica],
+    'percentual_expansao': [percentual_expansao],
+    'skus_com_multiplas_embalagens': [skus_multiplas],
+    'skus_com_uma_embalagem': [skus_uma],
+    'tipos_ovo_unicos': [df_comp_tecnica['tipo_ovo'].nunique()]
+}
+
+df_auditoria = pd.DataFrame(relatorio_auditoria)
+path_auditoria = Path("inputs/compatibilidade_tecnica_sku_embalagem_auditoria.csv")
+df_auditoria.to_csv(path_auditoria, index=False, encoding='utf-8')
+
 print(f"\n[OK] Dataset salvo: {output_path}")
+print(f"[OK] Relatorio de auditoria salvo: {path_auditoria}")
 
 print("\n" + "="*80)
 print("ESTATISTICAS:")
