@@ -74,6 +74,7 @@ class ModeloOtimizacaoComRealocacao:
         self._carregar_compatibilidade()
         self._carregar_precos()
         self._carregar_custos()
+        self._carregar_demanda_historica()
         self._preparar_dados_otimizacao()
         
         self.logger.info("\n[OK] Dados carregados com sucesso!")
@@ -289,6 +290,165 @@ class ModeloOtimizacaoComRealocacao:
         self.logger.info(f"  Custo medio: R$ {df_custo['custo_ytd'].mean():.2f}")
         
         self.dados['custos'] = df_custo[['item', 'custo_ytd']].drop_duplicates('item')
+    
+    def _carregar_demanda_historica(self):
+        """Carrega demanda historica por SKU para restricoes de viabilidade."""
+        considerar_demanda = self.config.get('modelo', {}).get('considerar_demanda_historica', False)
+        
+        if not considerar_demanda:
+            self.logger.info("\n[6/7] Demanda historica: Desabilitada")
+            self.dados['demanda_historica'] = pd.DataFrame(columns=['item', 'demanda_max'])
+            return
+        
+        self.logger.info("\n[6/7] Carregando demanda historica...")
+        
+        # Tentar carregar faturamento historico
+        path_fat = Path(self.config['paths'].get('faturamento', '../manti_fat_2024.parquet'))
+        
+        if not path_fat.exists():
+            self.logger.warning("  Arquivo de faturamento historico nao encontrado!")
+            self.logger.warning("  Continuando sem restricoes de demanda historica.")
+            self.dados['demanda_historica'] = pd.DataFrame(columns=['item', 'demanda_max'])
+            return
+        
+        try:
+            df_fat = pd.read_parquet(path_fat)
+            
+            # Detectar colunas
+            col_item = None
+            col_qtd = None
+            col_data = None
+            
+            for col in df_fat.columns:
+                if 'item' in col.lower() and col_item is None:
+                    col_item = col
+                if 'quantidade' in col.lower() and col_qtd is None:
+                    col_qtd = col
+                if 'emiss' in col.lower() or 'data' in col.lower():
+                    if col_data is None:
+                        col_data = col
+            
+            if col_item is None or col_qtd is None or col_data is None:
+                raise ValueError("Colunas necessarias nao encontradas no faturamento")
+            
+            # Converter data
+            df_fat[col_data] = pd.to_datetime(df_fat[col_data], errors='coerce')
+            df_fat = df_fat[df_fat[col_data].notna()]
+            
+            # Filtrar periodo historico
+            periodo_meses = self.config.get('modelo', {}).get('periodo_historico_meses', 6)
+            data_limite = df_fat[col_data].max() - pd.DateOffset(months=periodo_meses)
+            df_fat = df_fat[df_fat[col_data] >= data_limite]
+            
+            # Ler granularidade (M=Mensal, S=Semanal, D=Diaria)
+            granularidade = self.config.get('modelo', {}).get('granularidade_demanda', 'M').upper()
+            if granularidade not in ['M', 'S', 'D']:
+                self.logger.warning(f"  Granularidade invalida '{granularidade}', usando 'M' (Mensal)")
+                granularidade = 'M'
+            
+            # Agregar por periodo baseado na granularidade
+            if granularidade == 'M':
+                # Agregar por mes (ano-mes)
+                df_fat['periodo'] = df_fat[col_data].dt.to_period('M')
+                periodo_desc = 'mensal'
+            elif granularidade == 'S':
+                # Agregar por semana (ano-semana)
+                df_fat['periodo'] = df_fat[col_data].dt.to_period('W')
+                periodo_desc = 'semanal'
+            else:  # granularidade == 'D'
+                # Agregar por dia
+                df_fat['periodo'] = df_fat[col_data].dt.date
+                periodo_desc = 'diaria'
+            
+            # Agregar quantidade por SKU e periodo
+            df_agregado = df_fat.groupby([col_item, 'periodo'])[col_qtd].sum().reset_index()
+            df_agregado.columns = ['item', 'periodo', 'demanda_periodo']
+            
+            # Calcular estatisticas por SKU sobre os periodos agregados
+            df_demanda = df_agregado.groupby('item')['demanda_periodo'].agg([
+                ('demanda_total', 'sum'),
+                ('demanda_media', 'mean'),
+                ('demanda_mediana', 'median'),
+                ('demanda_maxima', 'max'),  # Maximo historico
+                ('demanda_p50', lambda x: x.quantile(0.50)),
+                ('demanda_p75', lambda x: x.quantile(0.75)),
+                ('demanda_p90', lambda x: x.quantile(0.90)),
+                ('num_periodos', 'count')
+            ]).reset_index()
+            
+            # Ler tipo de calculo (percentil ou maximo)
+            tipo_calculo = self.config.get('modelo', {}).get('tipo_calculo_demanda', 'percentil').lower()
+            
+            # Inicializar variaveis para logs
+            fator_percentual = None
+            percentil = None
+            fator_expansao = None
+            
+            if tipo_calculo == 'maximo':
+                # Usar maximo historico com fator percentual
+                fator_percentual = self.config.get('modelo', {}).get('fator_percentual_maximo', 1.2)
+                df_demanda['demanda_max'] = df_demanda['demanda_maxima'] * fator_percentual
+                df_demanda['demanda_base'] = df_demanda['demanda_maxima']  # Para logs
+                metodo_desc = f"MAXIMO HISTORICO × {fator_percentual}"
+            else:
+                # Usar percentil com fator de expansao (logica original)
+                percentil = self.config.get('modelo', {}).get('percentil_demanda', 75)
+                fator_expansao = self.config.get('modelo', {}).get('fator_expansao_demanda', 1.5)
+                
+                # Selecionar coluna de percentil baseada na configuracao
+                if percentil == 50:
+                    df_demanda['demanda_percentil'] = df_demanda['demanda_p50']
+                elif percentil == 75:
+                    df_demanda['demanda_percentil'] = df_demanda['demanda_p75']
+                elif percentil == 90:
+                    df_demanda['demanda_percentil'] = df_demanda['demanda_p90']
+                else:
+                    # Calcular percentil customizado diretamente dos periodos agregados
+                    demanda_custom = df_agregado.groupby('item')['demanda_periodo'].quantile(percentil / 100.0).reset_index()
+                    demanda_custom.columns = ['item', 'demanda_percentil']
+                    df_demanda = df_demanda.merge(demanda_custom, on='item', how='left')
+                    # Preencher com mediana se nao tiver valor
+                    df_demanda['demanda_percentil'] = df_demanda['demanda_percentil'].fillna(df_demanda['demanda_mediana'])
+                
+                df_demanda['demanda_max'] = df_demanda['demanda_percentil'] * fator_expansao
+                df_demanda['demanda_base'] = df_demanda['demanda_percentil']  # Para logs
+                metodo_desc = f"PERCENTIL {percentil}% × {fator_expansao}"
+            
+            df_demanda['item'] = df_demanda['item'].astype(int)
+            
+            # Calcular demanda media mensal para comparacao
+            df_demanda['demanda_media_mensal'] = df_demanda['demanda_total'] / periodo_meses
+            
+            # Filtrar apenas SKUs com demanda valida
+            df_demanda = df_demanda[df_demanda['demanda_max'] > 0]
+            
+            self.logger.info(f"  SKUs com demanda historica: {len(df_demanda)}")
+            self.logger.info(f"  Periodo analisado: {periodo_meses} meses")
+            self.logger.info(f"  Granularidade: {periodo_desc.upper()} ({granularidade})")
+            self.logger.info(f"  Metodo de calculo: {metodo_desc}")
+            if tipo_calculo == 'maximo':
+                self.logger.info(f"  Maximo historico medio: {df_demanda['demanda_base'].mean():,.0f} unidades")
+                self.logger.info(f"  Fator percentual: {fator_percentual}x")
+            else:
+                self.logger.info(f"  Percentil utilizado: {percentil}%")
+                self.logger.info(f"  Fator de expansao: {fator_expansao}x")
+            self.logger.info(f"  Demanda maxima media: {df_demanda['demanda_max'].mean():,.0f} unidades")
+            self.logger.info(f"  Periodos agregados por SKU (media): {df_demanda['num_periodos'].mean():.1f}")
+            
+            # Selecionar colunas para salvar (depende do tipo de calculo)
+            colunas_salvar = ['item', 'demanda_max', 'demanda_media_mensal', 'num_periodos']
+            if tipo_calculo == 'maximo':
+                colunas_salvar.append('demanda_base')  # demanda_base = demanda_maxima
+            else:
+                if 'demanda_percentil' in df_demanda.columns:
+                    colunas_salvar.append('demanda_percentil')
+            
+            self.dados['demanda_historica'] = df_demanda[colunas_salvar]
+            
+        except Exception as e:
+            self.logger.warning(f"  Erro ao carregar demanda historica: {e}")
+            self.logger.warning("  Continuando sem restricoes de demanda historica.")
+            self.dados['demanda_historica'] = pd.DataFrame(columns=['item', 'demanda_max'])
     
     def _preparar_dados_otimizacao(self):
         """Prepara dados para otimizacao."""
@@ -597,13 +757,17 @@ class ModeloOtimizacaoComRealocacao:
         usar_apenas_excedente = self.dados.get('usar_apenas_excedente', True)
         items_unicos = df_base['item'].unique()
         
+        # Ler configuracao de demanda historica
+        considerar_demanda = self.config.get('modelo', {}).get('considerar_demanda_historica', False)
+        df_demanda = self.dados.get('demanda_historica', pd.DataFrame(columns=['item', 'demanda_max'])) if considerar_demanda else pd.DataFrame(columns=['item', 'demanda_max'])
+        limite_realocacao = self.config.get('modelo', {}).get('limite_realocacao', 2.0)
+        
         num_restricoes_sku = 0
+        num_restricoes_demanda = 0
+        
         for item in items_unicos:
             # Todas as embalagens deste item
             embalagens_item = df_base[df_base['item'] == item]['embalagem'].unique()
-            
-            if len(embalagens_item) <= 1:
-                continue
             
             # Estoque base do item (excedente ou total, dependendo da flag)
             estoque_base_item = df_base[df_base['item'] == item]['estoque_excedente_sku'].iloc[0] if len(df_base[df_base['item'] == item]) > 0 else 0
@@ -611,20 +775,45 @@ class ModeloOtimizacaoComRealocacao:
             if estoque_base_item <= 0:
                 continue
             
+            # Soma de todas as alocacoes do item (todas as embalagens)
             soma_item = sum(
                 self.variaveis.get((item, emb), 0)
                 for emb in embalagens_item
                 if (item, emb) in self.variaveis
             )
             
-            # Permite receber ate 2x o estoque base original (realocacao moderada)
-            limite_realocacao = self.config.get('modelo', {}).get('limite_realocacao', 2.0)
-            self.solver.Add(soma_item <= estoque_base_item * limite_realocacao)
+            # Limite baseado em estoque (realocacao) - apenas para SKUs com multiplas embalagens
+            if len(embalagens_item) > 1:
+                limite_estoque = estoque_base_item * limite_realocacao
+            else:
+                # Se tem apenas 1 embalagem, limite e o proprio estoque
+                limite_estoque = estoque_base_item
+            
+            # RESTRICAO 3A: Limite de demanda historica (se habilitado)
+            # IMPORTANTE: Esta restricao deve ser aplicada a TODOS os SKUs, nao apenas aos com multiplas embalagens
+            limite_demanda = float('inf')
+            
+            if considerar_demanda:
+                demanda_sku = df_demanda[df_demanda['item'] == item]['demanda_max']
+                
+                if len(demanda_sku) > 0:
+                    limite_demanda = float(demanda_sku.iloc[0])
+                    num_restricoes_demanda += 1
+            
+            # Limite final: menor entre limite de estoque e limite de demanda
+            limite_final = min(limite_estoque, limite_demanda)
+            
+            # Aplicar restricao
+            self.solver.Add(soma_item <= limite_final)
             num_restricoes_sku += 1
         
         num_restricoes += num_restricoes_sku
         modo_desc = "excedente" if usar_apenas_excedente else "total"
-        self.logger.info(f"  Restricoes de limite por SKU (no {modo_desc}): {num_restricoes_sku}")
+        considerar_demanda = self.config.get('modelo', {}).get('considerar_demanda_historica', False)
+        demanda_desc = " + demanda historica" if considerar_demanda else ""
+        self.logger.info(f"  Restricoes de limite por SKU (no {modo_desc}{demanda_desc}): {num_restricoes_sku}")
+        if considerar_demanda and num_restricoes_demanda > 0:
+            self.logger.info(f"    - Restricoes com demanda historica aplicada: {num_restricoes_demanda}")
         self.logger.info(f"  Total de restricoes: {num_restricoes}")
     
     def _definir_objetivo(self, df_base: pd.DataFrame):
