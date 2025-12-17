@@ -44,3 +44,7 @@ Thumbs.db
 *.log
 *.bak
 
+# Arquivos de teste e análise
+teste_*.log
+execucao_*.log
+

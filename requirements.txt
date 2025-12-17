@@ -1,7 +1,16 @@
+# Dependências principais do modelo
 pandas>=1.5.0
 numpy>=1.23.0
 ortools>=9.0
 pyyaml>=6.0
 pyarrow>=10.0.0
 openpyxl>=3.0.0
+
+# Notas:
+# - pandas: Manipulação de dados e DataFrames
+# - numpy: Operações numéricas
+# - ortools: Solver MILP (SCIP)
+# - pyyaml: Leitura de arquivos de configuração YAML
+# - pyarrow: Leitura de arquivos Parquet
+# - openpyxl: Leitura/escrita de arquivos Excel
 
