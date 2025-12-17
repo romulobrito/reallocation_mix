@@ -2,10 +2,10 @@
 
 ## Indice
 
-- [Visão Geral](#visão-geral)
+- [Visao Geral](#visao-geral)
 - [Conceito e Ideia do Modelo](#conceito-e-ideia-do-modelo)
-- [Instalação](#instalação)
-- [Configuração](#configuração)
+- [Instalacao](#instalacao)
+- [Configuracao](#configuracao)
 - [Como Usar](#como-usar)
 - [Estrutura do Projeto](#estrutura-do-projeto)
 - [Funcionalidades](#funcionalidades)
@@ -388,13 +388,13 @@ Com base em testes realizados sobre múltiplas datas:
 ## Documentacao Adicional
 
 - **Fluxo do Modelo**: Ver `FLUXO_MODELO.md` para diagramas de fluxo
-- **Documentação Técnica**: Ver `../modelo_otimizacao_tecnico_v3.tex` para especificação matemática completa
-- **Diferenças entre Modelos**: Ver `DIFERENCA_MODELOS.md`
+- **Documentacao Tecnica**: Ver `../modelo_otimizacao_tecnico_v3.tex` para especificacao matematica completa
+- **Diferencas entre Modelos**: Ver `DIFERENCA_MODELOS.md`
 
 ## Referencias
 
 - **OR-Tools**: https://developers.google.com/optimization
-- **Documentação Técnica**: `../modelo_otimizacao_tecnico_v3.tex`
+- **Documentacao Tecnica**: `../modelo_otimizacao_tecnico_v3.tex`
 
 ## Observacoes Importantes
 
