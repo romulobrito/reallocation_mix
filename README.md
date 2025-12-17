@@ -1,6 +1,6 @@
 # Modelo de Otimização de Mix Diário com Realocação entre SKUs
 
-## 📋 Índice
+## Indice
 
 - [Visão Geral](#visão-geral)
 - [Conceito e Ideia do Modelo](#conceito-e-ideia-do-modelo)
@@ -12,7 +12,7 @@
 - [Resultados](#resultados)
 - [Troubleshooting](#troubleshooting)
 
-## 🎯 Visão Geral
+## Visao Geral
 
 Este modelo utiliza **Programação Linear Inteira Mista (MILP)** com OR-Tools para otimizar o mix diário de produtos, permitindo **realocação de volume entre SKUs da mesma classe biológica** para maximizar a margem total ou minimizar custos.
 
@@ -20,7 +20,7 @@ Este modelo utiliza **Programação Linear Inteira Mista (MILP)** com OR-Tools p
 
 **Realocação entre SKUs da mesma classe**: SKUs biologicamente equivalentes (mesma classe) compartilham o estoque total da classe, permitindo que o modelo mova volume de SKUs com menor margem para SKUs com maior margem, gerando ganhos significativos (tipicamente **24-28% de aumento de margem**).
 
-## 💡 Conceito e Ideia do Modelo
+## Conceito e Ideia do Modelo
 
 ### Problema de Negócio
 
@@ -54,7 +54,7 @@ O modelo resolve este problema através de:
 - O modelo pode alocar mais de 1000 unidades para SKU A (ex: 1500 un), desde que o total não ultrapasse 1800 unidades
 - Margem = 1500×0.50 + 300×0.30 = **R$ 840** (ganho de **18%**)
 
-## 🚀 Instalação
+## Instalacao
 
 ### Pré-requisitos
 
@@ -102,7 +102,7 @@ pip install pandas>=1.5.0 numpy>=1.23.0 ortools>=9.0 pyyaml>=6.0 pyarrow>=10.0.0
 python3 -c "import pandas, numpy, ortools, yaml; print('Dependências instaladas com sucesso!')"
 ```
 
-## ⚙️ Configuração
+## Configuracao
 
 ### Arquivos de Configuração
 
@@ -168,7 +168,7 @@ Os seguintes arquivos devem estar disponíveis (não versionados no Git):
 4. **Classificação de SKUs**: `../base_skus_classes.xlsx`
    - Colunas: `item`, `Classe_Produto`
 
-## 📖 Como Usar
+## Como Usar
 
 ### Passo 1: Preparar Dados de Entrada
 
@@ -233,7 +233,7 @@ O log no console mostra:
 - Ganho absoluto e percentual
 - Realocações significativas por SKU
 
-## 📁 Estrutura do Projeto
+## Estrutura do Projeto
 
 ```
 otimizacao_mix_diario/
@@ -243,7 +243,7 @@ otimizacao_mix_diario/
 ├── .gitignore                             # Arquivos ignorados pelo Git
 ├── config.yaml                            # Configurações do modelo
 │
-├── modelo_otimizacao_com_realocacao.py   # Modelo principal ⭐
+├── modelo_otimizacao_com_realocacao.py   # Modelo principal
 │
 ├── Scripts de Preparação de Dados:
 │   ├── extrair_compatibilidade_embalagem.py
@@ -274,7 +274,7 @@ otimizacao_mix_diario/
     └── modelo_YYYYMMDD_HHMMSS.log
 ```
 
-## 🎛️ Funcionalidades
+## Funcionalidades
 
 ### 1. Modos de Operação
 
@@ -325,7 +325,7 @@ modelo:
 - **Limite**: Cada SKU pode receber até `λ × estoque_original` (padrão: 2.0x)
 - **Benefício**: Captura ganhos através de redistribuição inteligente
 
-## 📊 Resultados
+## Resultados
 
 ### Resultados Típicos
 
@@ -357,7 +357,7 @@ Com base em testes realizados sobre múltiplas datas:
 - Informações de debug
 - Métricas detalhadas de ganho
 
-## 🔧 Troubleshooting
+## Troubleshooting
 
 ### Erro: "Arquivo não encontrado: inputs/compatibilidade_sku_embalagem.csv"
 **Solução**: Execute primeiro `python extrair_compatibilidade_embalagem.py`
@@ -385,18 +385,18 @@ Com base em testes realizados sobre múltiplas datas:
 - Ative o ambiente virtual: `source venv/bin/activate`
 - Instale as dependências: `pip install -r requirements.txt`
 
-## 📚 Documentação Adicional
+## Documentacao Adicional
 
 - **Fluxo do Modelo**: Ver `FLUXO_MODELO.md` para diagramas de fluxo
 - **Documentação Técnica**: Ver `../modelo_otimizacao_tecnico_v3.tex` para especificação matemática completa
 - **Diferenças entre Modelos**: Ver `DIFERENCA_MODELOS.md`
 
-## 🔗 Referências
+## Referencias
 
 - **OR-Tools**: https://developers.google.com/optimization
 - **Documentação Técnica**: `../modelo_otimizacao_tecnico_v3.tex`
 
-## ⚠️ Observações Importantes
+## Observacoes Importantes
 
 ### Filtro de Margem Positiva
 
@@ -410,15 +410,15 @@ Com base em testes realizados sobre múltiplas datas:
 - Default: `tipo_objetivo: maximizar_margem`
 - Se `tipo_objetivo` não for `maximizar_margem`, assume `minimizar_custos`
 
-## 📝 Licença
+## Licenca
 
 Este projeto é de uso interno da Mantiqueira.
 
-## 👤 Autor
+## Autor
 
-Romulo Brito - 2024
+Romulo Brito - 2025
 
 ---
 
-**Versão**: 3.0  
-**Última atualização**: 2024-12-09
+**Versao**: 3.0  
+**Ultima atualizacao**: 2025-01-16
