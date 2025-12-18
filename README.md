@@ -292,12 +292,17 @@ otimizacao_mix_diario/
 - **Uso**: Operação normal do dia a dia
 - **Objetivo**: Maximizar margem total (preço - custo)
 - **Configuração**: `tipo_objetivo: maximizar_margem`
+- **Comportamento**: Seleciona combinações que maximizam a margem total
 
 #### Minimizar Custos
 - **Uso**: Desova de estoque, fim de mês, preços fixos
 - **Objetivo**: Minimizar custos totais mantendo receita
 - **Configuração**: `tipo_objetivo: minimizar_custos`
-- **Observação**: Ainda filtra combinações com margem positiva (ver README)
+- **Comportamento**: Seleciona combinações que minimizam os custos totais, priorizando SKUs com menor custo
+- **Observação**: 
+  - Ainda filtra combinações com margem positiva (ver seção "Observações Importantes")
+  - O modelo exibe tanto margem quanto custos nos logs para comparação
+  - Se `tipo_objetivo` não for `maximizar_margem`, assume automaticamente `minimizar_custos`
 
 ### 3. Restrições de Demanda Histórica (Opcional)
 

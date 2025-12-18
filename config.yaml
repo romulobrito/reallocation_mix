@@ -77,7 +77,8 @@ modelo:
   variaveis_continuas: true     # true = LP relaxado, false = MILP puro
   
   # Objetivo
-  maximizar_margem_absoluta: true      # true = R$, false = %
+  tipo_objetivo: minimizar_custos  # "maximizar_margem" ou "minimizar_custos"
+  maximizar_margem_absoluta: true      # true = R$, false = % (usado apenas se tipo_objetivo=maximizar_margem)
   
   # Restrições opcionais
   escoar_todo_estoque: false   # Se true, força escoar pelo menos 95% do estoque

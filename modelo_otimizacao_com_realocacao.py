@@ -13,7 +13,7 @@ Isso permite mover volume de SKUs com menor margem para SKUs com maior margem,
 gerando ganho significativo.
 
 Autor: Romulo Brito
-Data: 2024-12-09
+Data: 2025-12-09
 """
 
 import pandas as pd
@@ -814,15 +814,61 @@ class ModeloOtimizacaoComRealocacao:
         self.logger.info(f"  Restricoes de limite por SKU (no {modo_desc}{demanda_desc}): {num_restricoes_sku}")
         if considerar_demanda and num_restricoes_demanda > 0:
             self.logger.info(f"    - Restricoes com demanda historica aplicada: {num_restricoes_demanda}")
+        
+        # RESTRICAO 4: Forcar alocacao minima (especialmente importante para minimizar_custos)
+        # Se o objetivo e minimizar custos, precisamos forcar alocacao para evitar solucao trivial (zero)
+        # IMPORTANTE: Esta restricao deve ser flexivel para nao conflitar com demanda historica
+        # ESTRATEGIA: Em vez de forcar percentual fixo, vamos adicionar um "penalty" na funcao objetivo
+        # que desencoraja alocacoes zero. Isso sera feito na funcao _definir_objetivo.
+        # Por enquanto, apenas logamos que a restricao seria necessaria
+        tipo_objetivo = self.config.get('modelo', {}).get('tipo_objetivo', 'maximizar_margem')
+        escoar_todo_estoque = self.config.get('modelo', {}).get('escoar_todo_estoque', False)
+        
+        num_restricoes_escoamento = 0
+        # NOTA: Restricao de escoamento minimo removida temporariamente devido a conflitos
+        # com restricoes de demanda historica. A funcao objetivo sera ajustada para desencorajar zeros.
+        if False:  # Desabilitado temporariamente
+            if tipo_objetivo == 'minimizar_custos' or escoar_todo_estoque:
+                # Calcular estoque total disponivel para otimizacao
+                estoque_total_disponivel = df_base['estoque_disponivel_otimizacao_classe'].sum()
+                
+                if estoque_total_disponivel > 0:
+                    # Soma total de todas as alocacoes (todas as classes)
+                    soma_total = sum(
+                        self.variaveis.get((row['item'], row['embalagem']), 0)
+                        for _, row in df_base.iterrows()
+                        if (row['item'], row['embalagem']) in self.variaveis
+                    )
+                    
+                    # Forcar alocacao de pelo menos 80% do estoque total (mais flexivel que 95% por classe)
+                    # Isso evita conflitos com restricoes de demanda historica
+                    percentual_minimo = 0.95 if escoar_todo_estoque else 0.80
+                    self.solver.Add(soma_total >= estoque_total_disponivel * percentual_minimo)
+                    num_restricoes_escoamento = 1
+        
+        if num_restricoes_escoamento > 0:
+            num_restricoes += num_restricoes_escoamento
+            motivo = "minimizar_custos" if tipo_objetivo == 'minimizar_custos' else "escoar_todo_estoque"
+            percentual = "95%" if escoar_todo_estoque else "80%"
+            self.logger.info(f"  Restricoes de escoamento minimo ({percentual} do estoque total) - motivo: {motivo}: {num_restricoes_escoamento}")
+        
         self.logger.info(f"  Total de restricoes: {num_restricoes}")
     
     def _definir_objetivo(self, df_base: pd.DataFrame):
-        """Define funcao objetivo: maximizar margem total (pedidos + excedente)."""
+        """Define funcao objetivo: maximizar margem ou minimizar custos (pedidos + excedente)."""
         self.logger.info("\n[3/4] Definindo funcao objetivo...")
         
+        # Determinar tipo de objetivo
+        tipo_objetivo = self.config.get('modelo', {}).get('tipo_objetivo', 'maximizar_margem')
+        if tipo_objetivo != 'maximizar_margem':
+            tipo_objetivo = 'minimizar_custos'
+        
+        objetivo_desc = "MAXIMIZAR MARGEM" if tipo_objetivo == 'maximizar_margem' else "MINIMIZAR CUSTOS"
+        self.logger.info(f"  Tipo de objetivo: {objetivo_desc}")
+        
         # Objetivo tem duas partes:
-        # 1. Margem dos pedidos atendidos
-        # 2. Margem da otimizacao no excedente
+        # 1. Pedidos atendidos
+        # 2. Otimizacao no excedente
         
         objetivo_pedidos = 0.0
         atender_pedidos = self.dados.get('atender_pedidos', True)
@@ -832,34 +878,82 @@ class ModeloOtimizacaoComRealocacao:
             for _, row in df_pedidos_sku.iterrows():
                 item = row['item']
                 if item in self.variaveis_pedidos:
-                    # Buscar margem unitaria do item (usar primeira embalagem disponivel)
-                    margem_item = df_base[df_base['item'] == item]['margem_unitaria'].iloc[0] if len(df_base[df_base['item'] == item]) > 0 else 0
-                    objetivo_pedidos += margem_item * self.variaveis_pedidos[item]
+                    if tipo_objetivo == 'maximizar_margem':
+                        # Buscar margem unitaria do item (usar primeira embalagem disponivel)
+                        margem_item = df_base[df_base['item'] == item]['margem_unitaria'].iloc[0] if len(df_base[df_base['item'] == item]) > 0 else 0
+                        objetivo_pedidos += margem_item * self.variaveis_pedidos[item]
+                    else:  # minimizar_custos
+                        # Buscar custo unitario do item
+                        custo_item = df_base[df_base['item'] == item]['custo_ytd'].iloc[0] if len(df_base[df_base['item'] == item]) > 0 else 0
+                        objetivo_pedidos += custo_item * self.variaveis_pedidos[item]
         
         # Objetivo da otimizacao no excedente
-        objetivo_excedente = sum(
-            row['margem_unitaria'] * self.variaveis.get((row['item'], row['embalagem']), 0)
-            for _, row in df_base.iterrows()
-            if (row['item'], row['embalagem']) in self.variaveis
-        )
+        if tipo_objetivo == 'maximizar_margem':
+            objetivo_excedente = sum(
+                row['margem_unitaria'] * self.variaveis.get((row['item'], row['embalagem']), 0)
+                for _, row in df_base.iterrows()
+                if (row['item'], row['embalagem']) in self.variaveis
+            )
+        else:  # minimizar_custos
+            # Para minimizar custos, adicionar um termo que desencoraja alocacoes zero
+            # Usamos um peso muito pequeno (negativo) para "recompensar" alocacoes
+            # Isso evita solucao trivial (zero) sem criar conflitos de restricoes
+            custo_total = sum(
+                row['custo_ytd'] * self.variaveis.get((row['item'], row['embalagem']), 0)
+                for _, row in df_base.iterrows()
+                if (row['item'], row['embalagem']) in self.variaveis
+            )
+            
+            # Termo de "recompensa" por alocacao (peso muito pequeno para nao interferir na minimizacao de custos)
+            # Usamos um valor negativo pequeno multiplicado pela quantidade total alocada
+            # Isso faz com que o modelo prefira alocar algo em vez de zero
+            quantidade_total = sum(
+                self.variaveis.get((row['item'], row['embalagem']), 0)
+                for _, row in df_base.iterrows()
+                if (row['item'], row['embalagem']) in self.variaveis
+            )
+            
+            # Peso: -200.0 por unidade alocada (maior que custo medio para forcar alocacao)
+            # Custo medio: R$ 156.51 por unidade
+            # Para que alocar seja melhor que nao alocar: custo - peso * qtd < 0
+            # Para 1 unidade: 156.51 - 200.0 * 1 = -43.49 < 0 (melhor que zero!)
+            # O peso e maior que o custo medio, mas nao muito maior, entao ainda prioriza SKUs com menor custo
+            # Exemplo: SKU A (custo 100) vs SKU B (custo 200)
+            #   A: 100 - 200 = -100
+            #   B: 200 - 200 = 0
+            #   Ainda prefere A (menor custo)
+            peso_recompensa = -200.0
+            objetivo_excedente = custo_total + (peso_recompensa * quantidade_total)
         
         objetivo_total = objetivo_pedidos + objetivo_excedente
-        self.solver.Maximize(objetivo_total)
         
-        # Estimar margem potencial
+        # Aplicar objetivo ao solver
+        if tipo_objetivo == 'maximizar_margem':
+            self.solver.Maximize(objetivo_total)
+        else:
+            self.solver.Minimize(objetivo_total)
+        
+        # Calcular metricas potenciais (margem E custos para comparacao)
         atender_pedidos = self.dados.get('atender_pedidos', True)
         usar_apenas_excedente = self.dados.get('usar_apenas_excedente', True)
         
+        # Metricas de pedidos
         margem_potencial_pedidos = 0.0
+        custo_potencial_pedidos = 0.0
         if atender_pedidos and len(df_pedidos_sku) > 0:
             for _, row in df_pedidos_sku.iterrows():
                 item = row['item']
                 qtd_pedida = row['quantidade_total_pedida']
                 estoque_item = df_base[df_base['item'] == item]['estoque_disponivel'].iloc[0] if len(df_base[df_base['item'] == item]) > 0 else 0
+                qtd_atendivel = min(qtd_pedida, estoque_item)
+                
                 margem_item = df_base[df_base['item'] == item]['margem_unitaria'].iloc[0] if len(df_base[df_base['item'] == item]) > 0 else 0
-                margem_potencial_pedidos += margem_item * min(qtd_pedida, estoque_item)
+                custo_item = df_base[df_base['item'] == item]['custo_ytd'].iloc[0] if len(df_base[df_base['item'] == item]) > 0 else 0
+                
+                margem_potencial_pedidos += margem_item * qtd_atendivel
+                custo_potencial_pedidos += custo_item * qtd_atendivel
         
-        # Calcular margem potencial da otimizacao
+        # Calcular metricas da otimizacao
         if usar_apenas_excedente:
             estoque_otimizacao = df_base['estoque_excedente_sku']
             modo_desc = "excedente"
@@ -868,12 +962,20 @@ class ModeloOtimizacaoComRealocacao:
             modo_desc = "total"
         
         margem_potencial_otimizacao = (df_base['margem_unitaria'] * estoque_otimizacao).sum()
-        margem_potencial_total = margem_potencial_pedidos + margem_potencial_otimizacao
+        custo_potencial_otimizacao = (df_base['custo_ytd'] * estoque_otimizacao).sum()
         
+        margem_potencial_total = margem_potencial_pedidos + margem_potencial_otimizacao
+        custo_potencial_total = custo_potencial_pedidos + custo_potencial_otimizacao
+        
+        # Logs
         if atender_pedidos:
             self.logger.info(f"  Margem potencial pedidos: R$ {margem_potencial_pedidos:,.2f}")
+            self.logger.info(f"  Custo potencial pedidos: R$ {custo_potencial_pedidos:,.2f}")
+        
         self.logger.info(f"  Margem potencial {modo_desc} (sem realocacao): R$ {margem_potencial_otimizacao:,.2f}")
+        self.logger.info(f"  Custo potencial {modo_desc} (sem realocacao): R$ {custo_potencial_otimizacao:,.2f}")
         self.logger.info(f"  Margem potencial total: R$ {margem_potencial_total:,.2f}")
+        self.logger.info(f"  Custo potencial total: R$ {custo_potencial_total:,.2f}")
     
     def resolver(self):
         """Resolve o modelo de otimizacao."""
@@ -960,6 +1062,14 @@ class ModeloOtimizacaoComRealocacao:
         
         self.resultado = pd.DataFrame(resultados)
         
+        # Garantir que coluna 'classe' existe mesmo se resultado estiver vazio
+        # (necessario para evitar erro no groupby('classe') em salvar_resultados)
+        if len(self.resultado) == 0:
+            self.resultado = pd.DataFrame(columns=['item', 'embalagem', 'classe', 'quantidade', 'tipo', 
+                                                   'estoque_original', 'estoque_excedente', 'preco', 
+                                                   'custo_ytd', 'margem_unitaria', 'receita_total', 
+                                                   'custo_total', 'margem_total'])
+        
         if len(self.resultado) > 0:
             # Adicionar coluna de variacao (realocacao) apenas para excedente
             if 'tipo' in self.resultado.columns:
@@ -1027,18 +1137,25 @@ class ModeloOtimizacaoComRealocacao:
                                            f"({sinal}{row['variacao_pct']:.1f}%)")
     
     def calcular_comparativo(self):
-        """Calcula margem baseline vs otimizada."""
+        """Calcula margem e custos baseline vs otimizados."""
         if self.resultado is None or len(self.resultado) == 0:
             return None
         
         df_estoque = self.dados['estoque']
         df_base = self.dados['base_otimizacao']
         
-        # Margem otimizada
-        margem_otimizada = self.resultado['margem_total'].sum()
+        # Determinar tipo de objetivo para exibir metricas corretas
+        tipo_objetivo = self.config.get('modelo', {}).get('tipo_objetivo', 'maximizar_margem')
+        if tipo_objetivo != 'maximizar_margem':
+            tipo_objetivo = 'minimizar_custos'
         
-        # Margem baseline: para cada SKU, usar a embalagem mais comum historicamente
+        # Metricas otimizadas
+        margem_otimizada = self.resultado['margem_total'].sum()
+        custo_otimizado = self.resultado['custo_total'].sum()
+        
+        # Metricas baseline: para cada SKU, usar a embalagem mais comum historicamente
         margem_baseline = 0.0
+        custo_baseline = 0.0
         
         for _, row in df_estoque.iterrows():
             item = row['item']
@@ -1050,26 +1167,46 @@ class ModeloOtimizacaoComRealocacao:
             if len(combinacoes_item) == 0:
                 continue
             
-            # Usar margem media das embalagens disponiveis como baseline
+            # Usar media das embalagens disponiveis como baseline
             margem_media = combinacoes_item['margem_unitaria'].mean()
+            custo_medio = combinacoes_item['custo_ytd'].mean()
+            
             margem_baseline += qtd_estoque * margem_media
+            custo_baseline += qtd_estoque * custo_medio
         
-        ganho = margem_otimizada - margem_baseline
-        ganho_pct = (ganho / margem_baseline * 100) if margem_baseline > 0 else 0
+        # Calcular ganhos/reducoes
+        ganho_margem = margem_otimizada - margem_baseline
+        ganho_margem_pct = (ganho_margem / margem_baseline * 100) if margem_baseline > 0 else 0
+        
+        reducao_custo = custo_baseline - custo_otimizado
+        reducao_custo_pct = (reducao_custo / custo_baseline * 100) if custo_baseline > 0 else 0
         
         self.logger.info("\n" + "="*80)
         self.logger.info("COMPARATIVO: BASELINE vs OTIMIZADO")
         self.logger.info("="*80)
+        
+        # Sempre exibir margem (para comparacao)
         self.logger.info(f"  Margem Baseline (sem realocacao): R$ {margem_baseline:,.2f}")
         self.logger.info(f"  Margem Otimizada (com realocacao): R$ {margem_otimizada:,.2f}")
-        self.logger.info(f"  GANHO ABSOLUTO: R$ {ganho:,.2f}")
-        self.logger.info(f"  GANHO PERCENTUAL: {ganho_pct:.2f}%")
+        self.logger.info(f"  GANHO MARGEM: R$ {ganho_margem:,.2f} ({ganho_margem_pct:.2f}%)")
+        
+        # Sempre exibir custos (para comparacao)
+        self.logger.info(f"  Custo Baseline (sem realocacao): R$ {custo_baseline:,.2f}")
+        self.logger.info(f"  Custo Otimizado (com realocacao): R$ {custo_otimizado:,.2f}")
+        if tipo_objetivo == 'minimizar_custos':
+            self.logger.info(f"  REDUCAO CUSTO: R$ {reducao_custo:,.2f} ({reducao_custo_pct:.2f}%)")
+        else:
+            self.logger.info(f"  Variacao Custo: R$ {reducao_custo:,.2f} ({reducao_custo_pct:.2f}%)")
         
         return {
             'margem_baseline': margem_baseline,
             'margem_otimizada': margem_otimizada,
-            'ganho_absoluto': ganho,
-            'ganho_percentual': ganho_pct
+            'ganho_absoluto': ganho_margem,
+            'ganho_percentual': ganho_margem_pct,
+            'custo_baseline': custo_baseline,
+            'custo_otimizado': custo_otimizado,
+            'reducao_custo': reducao_custo,
+            'reducao_custo_pct': reducao_custo_pct
         }
     
     def salvar_resultados(self):
