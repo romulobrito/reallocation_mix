@@ -1005,7 +1005,20 @@ class ModeloOtimizacaoComRealocacao:
         """Extrai resultado da otimizacao."""
         df_base = self.dados['base_otimizacao']
         
-        # Resultados da otimizacao no excedente
+        # Determinar tipo baseado no modo de operacao
+        atender_pedidos = self.dados.get('atender_pedidos', True)
+        usar_apenas_excedente = self.dados.get('usar_apenas_excedente', True)
+        
+        # Tipo de alocacao:
+        # - Se atender_pedidos=true: tipo = 'EXCEDENTE' (otimiza apenas o que sobrou apos pedidos)
+        # - Se atender_pedidos=false e usar_apenas_excedente=false: tipo = 'ESTOQUE_TOTAL' (otimiza todo estoque)
+        # - Se atender_pedidos=false e usar_apenas_excedente=true: tipo = 'EXCEDENTE' (mas nao faz sentido, ja ajustado)
+        if atender_pedidos:
+            tipo_alocacao = 'EXCEDENTE'
+        else:
+            tipo_alocacao = 'ESTOQUE_TOTAL' if not usar_apenas_excedente else 'EXCEDENTE'
+        
+        # Resultados da otimizacao
         resultados = []
         for (item, emb), var in self.variaveis.items():
             qtd = var.solution_value()
@@ -1019,7 +1032,7 @@ class ModeloOtimizacaoComRealocacao:
                         'embalagem': emb,
                         'classe': row['classe'],
                         'quantidade': qtd,
-                        'tipo': 'EXCEDENTE',
+                        'tipo': tipo_alocacao,
                         'estoque_original': row['estoque_disponivel'],
                         'estoque_excedente': row['estoque_excedente_sku'],
                         'preco': row['preco'],
@@ -1071,18 +1084,34 @@ class ModeloOtimizacaoComRealocacao:
                                                    'custo_total', 'margem_total'])
         
         if len(self.resultado) > 0:
-            # Adicionar coluna de variacao (realocacao) apenas para excedente
+            # Adicionar coluna de variacao (realocacao) para otimizacao (excedente ou estoque total)
             if 'tipo' in self.resultado.columns:
-                # Para excedente: comparar com estoque excedente original
+                # Para EXCEDENTE: comparar com estoque excedente original
+                # Para ESTOQUE_TOTAL: comparar com estoque original (todo o estoque)
                 mask_excedente = self.resultado['tipo'] == 'EXCEDENTE'
-                self.resultado.loc[mask_excedente, 'variacao_qtd'] = (
-                    self.resultado.loc[mask_excedente, 'quantidade'] - 
-                    self.resultado.loc[mask_excedente, 'estoque_excedente']
-                )
-                self.resultado.loc[mask_excedente, 'variacao_pct'] = (
-                    self.resultado.loc[mask_excedente, 'variacao_qtd'] / 
-                    self.resultado.loc[mask_excedente, 'estoque_excedente'].replace(0, 1) * 100
-                )
+                mask_estoque_total = self.resultado['tipo'] == 'ESTOQUE_TOTAL'
+                
+                # Variacao para excedente
+                if mask_excedente.any():
+                    self.resultado.loc[mask_excedente, 'variacao_qtd'] = (
+                        self.resultado.loc[mask_excedente, 'quantidade'] - 
+                        self.resultado.loc[mask_excedente, 'estoque_excedente']
+                    )
+                    self.resultado.loc[mask_excedente, 'variacao_pct'] = (
+                        self.resultado.loc[mask_excedente, 'variacao_qtd'] / 
+                        self.resultado.loc[mask_excedente, 'estoque_excedente'].replace(0, 1) * 100
+                    )
+                
+                # Variacao para estoque total
+                if mask_estoque_total.any():
+                    self.resultado.loc[mask_estoque_total, 'variacao_qtd'] = (
+                        self.resultado.loc[mask_estoque_total, 'quantidade'] - 
+                        self.resultado.loc[mask_estoque_total, 'estoque_original']
+                    )
+                    self.resultado.loc[mask_estoque_total, 'variacao_pct'] = (
+                        self.resultado.loc[mask_estoque_total, 'variacao_qtd'] / 
+                        self.resultado.loc[mask_estoque_total, 'estoque_original'].replace(0, 1) * 100
+                    )
             else:
                 # Fallback para compatibilidade
                 self.resultado['variacao_qtd'] = (
@@ -1094,10 +1123,10 @@ class ModeloOtimizacaoComRealocacao:
             
             self.logger.info("\nRESULTADOS:")
             
-            # Separar pedidos e excedente
+            # Separar pedidos e otimizacao
             if 'tipo' in self.resultado.columns:
                 df_pedidos = self.resultado[self.resultado['tipo'] == 'PEDIDO']
-                df_excedente = self.resultado[self.resultado['tipo'] == 'EXCEDENTE']
+                df_otimizacao = self.resultado[self.resultado['tipo'].isin(['EXCEDENTE', 'ESTOQUE_TOTAL'])]
                 
                 if len(df_pedidos) > 0:
                     self.logger.info(f"\n  PEDIDOS ATENDIDOS:")
@@ -1107,11 +1136,15 @@ class ModeloOtimizacaoComRealocacao:
                     if 'percentual_atendido' in df_pedidos.columns:
                         self.logger.info(f"    Percentual medio atendido: {df_pedidos['percentual_atendido'].mean():.1f}%")
                 
-                if len(df_excedente) > 0:
-                    self.logger.info(f"\n  OTIMIZACAO NO EXCEDENTE:")
-                    self.logger.info(f"    Combinacoes escolhidas: {len(df_excedente)}")
-                    self.logger.info(f"    Quantidade alocada: {df_excedente['quantidade'].sum():,.0f} unidades")
-                    self.logger.info(f"    Margem do excedente: R$ {df_excedente['margem_total'].sum():,.2f}")
+                if len(df_otimizacao) > 0:
+                    tipo_desc = df_otimizacao['tipo'].iloc[0]
+                    if tipo_desc == 'EXCEDENTE':
+                        self.logger.info(f"\n  OTIMIZACAO NO EXCEDENTE:")
+                    else:
+                        self.logger.info(f"\n  OTIMIZACAO DO ESTOQUE TOTAL:")
+                    self.logger.info(f"    Combinacoes escolhidas: {len(df_otimizacao)}")
+                    self.logger.info(f"    Quantidade alocada: {df_otimizacao['quantidade'].sum():,.0f} unidades")
+                    self.logger.info(f"    Margem: R$ {df_otimizacao['margem_total'].sum():,.2f}")
             else:
                 self.logger.info(f"  Combinacoes escolhidas: {len(self.resultado)}")
             
@@ -1123,13 +1156,17 @@ class ModeloOtimizacaoComRealocacao:
             if self.resultado['receita_total'].sum() > 0:
                 self.logger.info(f"    Margem %: {self.resultado['margem_total'].sum() / self.resultado['receita_total'].sum() * 100:.2f}%")
             
-            # Mostrar realocacoes significativas (apenas no excedente)
+            # Mostrar realocacoes significativas (apenas na otimizacao, nao em pedidos)
             if 'tipo' in self.resultado.columns and 'variacao_pct' in self.resultado.columns:
-                df_excedente = self.resultado[self.resultado['tipo'] == 'EXCEDENTE']
-                if len(df_excedente) > 0 and 'variacao_pct' in df_excedente.columns:
-                    realocacoes = df_excedente[abs(df_excedente['variacao_pct']) > 5].sort_values('variacao_qtd', ascending=False)
+                df_otimizacao = self.resultado[self.resultado['tipo'].isin(['EXCEDENTE', 'ESTOQUE_TOTAL'])]
+                if len(df_otimizacao) > 0 and 'variacao_pct' in df_otimizacao.columns:
+                    realocacoes = df_otimizacao[abs(df_otimizacao['variacao_pct']) > 5].sort_values('variacao_qtd', ascending=False)
                     if len(realocacoes) > 0:
-                        self.logger.info(f"\n  REALOCACOES SIGNIFICATIVAS NO EXCEDENTE (>5%):")
+                        tipo_desc = df_otimizacao['tipo'].iloc[0]
+                        if tipo_desc == 'EXCEDENTE':
+                            self.logger.info(f"\n  REALOCACOES SIGNIFICATIVAS NO EXCEDENTE (>5%):")
+                        else:
+                            self.logger.info(f"\n  REALOCACOES SIGNIFICATIVAS NO ESTOQUE TOTAL (>5%):")
                         for _, row in realocacoes.head(10).iterrows():
                             sinal = '+' if row['variacao_qtd'] > 0 else ''
                             self.logger.info(f"    SKU {row['item']} ({row['classe']}): "
