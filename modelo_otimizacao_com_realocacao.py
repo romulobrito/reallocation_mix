@@ -1143,16 +1143,12 @@ class ModeloOtimizacaoComRealocacao:
             self.resultado = pd.DataFrame(columns=['item_id', 'item', 'embalagem', 'classe', 'quantidade', 'tipo', 
                                                    'producao_total', 'producao_disponivel', 'preco', 
                                                    'custo_ytd', 'margem_unitaria', 'receita_total', 
-                                                   'custo_total', 'margem_total', 'variacao_qtd'])
+                                                   'custo_total', 'margem_total'])
         
         if len(self.resultado) > 0:
-            # Adicionar coluna de variacao (realocacao) para otimizacao
-            # A variacao e calculada em relacao a producao disponivel da classe
-            # Como a producao e por classe, nao temos um "estoque original" por item_id
-            # A variacao mostra quanto foi alocado vs. a producao disponivel da classe
-            if 'producao_disponivel' in self.resultado.columns:
-                # Variacao em relacao a producao disponivel (nao faz muito sentido por item_id, mas mantido para logs)
-                self.resultado['variacao_qtd'] = self.resultado['quantidade']  # Alocacao vs. zero (nao temos baseline por item_id)
+            # Nota: Removidas colunas variacao_qtd e variacao_pct
+            # No novo formato (producao por classe), nao temos baseline por item_id
+            # para calcular variacao. A quantidade alocada ja e suficiente.
             
             self.logger.info("\nRESULTADOS:")
             
@@ -1297,9 +1293,12 @@ class ModeloOtimizacaoComRealocacao:
         arquivo_resultado_xlsx = output_dir / f'resultado_realocacao_{modo_sufixo}_{timestamp}.xlsx'
         
         
+        # Remover colunas de variacao se existirem (nao fazem sentido no novo formato)
         resultado_para_salvar = self.resultado.copy()
-        if 'variacao_pct' in resultado_para_salvar.columns:
-            resultado_para_salvar = resultado_para_salvar.drop(columns=['variacao_pct'])
+        colunas_para_remover = ['variacao_pct', 'variacao_qtd']
+        for col in colunas_para_remover:
+            if col in resultado_para_salvar.columns:
+                resultado_para_salvar = resultado_para_salvar.drop(columns=[col])
         
         resultado_para_salvar.to_csv(arquivo_resultado_csv, index=False, encoding='utf-8')
         
