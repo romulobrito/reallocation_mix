@@ -6,15 +6,15 @@
 # CAMINHOS DOS ARQUIVOS
 # ==============================================================================
 paths:
-  # Arquivos de entrada (relativos à raiz do projeto)
-  estoque: "../manti_estoque.parquet"
-  classes: "../base_skus_classes.xlsx"  # Classificacao de SKUs por classe
+  # Arquivos de entrada (todos na pasta inputs/)
+  estoque: "inputs/manti_estoque.parquet"
+  classes: "inputs/base_skus_classes.xlsx"  # Classificacao de SKUs por classe
   pedidos: "inputs/pedidos_clientes.csv"  # Pedidos de clientes (pode ser parcial)
   compatibilidade: "inputs/compatibilidade_sku_embalagem.csv"  # Histórico
   # compatibilidade_tecnica: "inputs/compatibilidade_tecnica_sku_embalagem.csv"  # Técnica (opcional)
   precos: "inputs/precos_sku_embalagem.csv"
-  custos: "../CUSTO ITEM.csv"
-  faturamento: "../manti_fat_2024.parquet"  # Faturamento historico para calcular demanda
+  custos: "inputs/CUSTO ITEM.csv"
+  faturamento: "inputs/manti_fat_2024.parquet"  # Faturamento historico para calcular demanda
   # custo_embalagem: "inputs/custo_embalagem.csv"  # Opcional
   
   # Arquivos de saída
@@ -51,7 +51,7 @@ dados:
   data_estoque: "2025-08-19"  # Data com maior estoque (71.873 unidades)
   
   # Tipo de estoque
-  tipo_estoque: "DISPONIVEL PARA VENDA"  # Ajustar conforme necessário
+  tipo_estoque: "DISPONIVEL PARA VENDA"  
   
   # Filtros de qualidade de dados
   sku_minimo_transacoes: 1      # Mínimo de transações para considerar SKU
@@ -77,14 +77,14 @@ modelo:
   variaveis_continuas: true     # true = LP relaxado, false = MILP puro
   
   # Objetivo
-  tipo_objetivo: minimizar_custos  # "maximizar_margem" ou "minimizar_custos"
+  tipo_objetivo: maximizar_margem  # "maximizar_margem" ou "minimizar_custos"
   maximizar_margem_absoluta: true      # true = R$, false = % (usado apenas se tipo_objetivo=maximizar_margem)
   
   # Restrições opcionais
-  escoar_todo_estoque: false   # Se true, força escoar pelo menos 95% do estoque
+  escoar_todo_estoque: true   # Se true, força escoar pelo menos 95% do estoque
   
   # Realocação entre SKUs da mesma classe
-  limite_realocacao: 2.0  # SKU pode receber até 2x seu estoque original (1.0 = sem realocação)
+  limite_realocacao: 2.5  # SKU pode receber até 2x seu estoque original (1.0 = sem realocação)
   
   # Controle de volume para otimização
   # IMPORTANTE: 
@@ -104,9 +104,9 @@ modelo:
   periodo_historico_meses: 12  # Quantos meses usar para calcular demanda historica
 
 # ==============================================================================
-# PARÂMETROS DE ANÁLISE DE RESULTADOS
+# PARÂMETROS DE ANÁLISE DE RESULTADOS (A SER IMPLEMENTADO)
 # ==============================================================================
-analise:
+analise: 
   # Top N
   top_n_combinations: 20       # Top 20 combinações por margem
   
@@ -129,9 +129,9 @@ debug:
 # ==============================================================================
 meta:
   versao_modelo: "1.0"
-  data_criacao: "2024-12-08"
+  data_criacao: "2025-12-08"
   autor: "7D"
   descricao: "Modelo de otimização de mix diário (SKU x Embalagem) sem clientes"
   changelog:
-    - "2024-12-08: Versão inicial - mix diário sem clientes"
+    - "2025-12-08: Versão inicial - mix diário sem clientes"
 

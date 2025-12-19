@@ -245,8 +245,52 @@ class ModeloOtimizacaoComRealocacao:
         self.dados['precos'] = df_precos
     
     def _carregar_custos(self):
-        """Carrega custos por SKU."""
+        """Carrega custos por (SKU, Embalagem) - o custo ja inclui a embalagem na descricao."""
         self.logger.info("\n[5/6] Carregando custos...")
+        
+        # Importar funcao de extrair embalagem
+        import re
+        
+        def extrair_embalagem_descricao(descricao: str) -> str:
+            """Extrai padrao de embalagem da descricao do item."""
+            if pd.isna(descricao):
+                return None
+            
+            desc_upper = str(descricao).upper()
+            
+            # Padrao 1: CX COM [numero] BJ DE [numero] UN
+            padrao1 = r'CX\s+COM\s+(\d+)\s+BJ\s+DE\s+(\d+)(?:\s+UN)?'
+            match = re.search(padrao1, desc_upper)
+            if match:
+                num_bj = match.group(1)
+                num_un = match.group(2)
+                return f"CX {num_bj} BJ {num_un} UN"
+            
+            # Padrao 2: CX [numero] BJ [numero] UN (sem COM/DE)
+            padrao2 = r'CX\s+(\d+)\s+BJ\s+(\d+)(?:\s+UN)?'
+            match = re.search(padrao2, desc_upper)
+            if match:
+                num_bj = match.group(1)
+                num_un = match.group(2)
+                return f"CX {num_bj} BJ {num_un} UN"
+            
+            # Padrao 3: CX [numero] BJ DE [numero] UN
+            padrao3 = r'CX\s+(\d+)\s+BJ\s+DE\s+(\d+)(?:\s+UN)?'
+            match = re.search(padrao3, desc_upper)
+            if match:
+                num_bj = match.group(1)
+                num_un = match.group(2)
+                return f"CX {num_bj} BJ {num_un} UN"
+            
+            # Padrao 4: CX COM [numero] BJ [numero] UN (sem DE)
+            padrao4 = r'CX\s+COM\s+(\d+)\s+BJ\s+(\d+)(?:\s+UN)?'
+            match = re.search(padrao4, desc_upper)
+            if match:
+                num_bj = match.group(1)
+                num_un = match.group(2)
+                return f"CX {num_bj} BJ {num_un} UN"
+            
+            return None
         
         path = Path(self.config['paths']['custos'])
         df_custo = pd.read_csv(path)
@@ -266,6 +310,9 @@ class ModeloOtimizacaoComRealocacao:
             errors='coerce'
         )
         
+        # Extrair embalagem da descricao (o custo ja inclui a embalagem)
+        df_custo['embalagem'] = df_custo[col_item_desc].apply(extrair_embalagem_descricao)
+        
         # Converter custo
         def parse_currency(valor):
             if pd.isna(valor):
@@ -283,13 +330,36 @@ class ModeloOtimizacaoComRealocacao:
                 break
         
         df_custo['custo_ytd'] = df_custo[col_custo].apply(parse_currency)
-        df_custo = df_custo[df_custo['item'].notna() & df_custo['custo_ytd'].notna()]
+        
+        # Filtrar apenas registros com item, embalagem e custo validos
+        df_custo = df_custo[
+            df_custo['item'].notna() & 
+            df_custo['custo_ytd'].notna() & 
+            df_custo['embalagem'].notna()
+        ]
         df_custo['item'] = df_custo['item'].astype(int)
         
-        self.logger.info(f"  SKUs com custo: {len(df_custo)}")
+        # Remover duplicatas por (item, embalagem) - manter o primeiro
+        df_custo = df_custo[['item', 'embalagem', 'custo_ytd']].drop_duplicates(['item', 'embalagem'])
+        
+        self.logger.info(f"  Combinacoes (SKU, Embalagem) com custo: {len(df_custo)}")
+        self.logger.info(f"  SKUs unicos com custo: {df_custo['item'].nunique()}")
         self.logger.info(f"  Custo medio: R$ {df_custo['custo_ytd'].mean():.2f}")
         
-        self.dados['custos'] = df_custo[['item', 'custo_ytd']].drop_duplicates('item')
+        # Estatisticas de embalagens
+        embalagens_unicas = df_custo['embalagem'].nunique()
+        self.logger.info(f"  Embalagens unicas: {embalagens_unicas}")
+        
+        # Mostrar exemplos de combinacoes sem embalagem extraida (para debug)
+        if df_custo['embalagem'].isna().any():
+            sem_embalagem = df_custo[df_custo['embalagem'].isna()]
+            self.logger.warning(f"  [AVISO] {len(sem_embalagem)} registros sem embalagem extraida (serao removidos)")
+            if len(sem_embalagem) > 0:
+                self.logger.warning(f"  Exemplos de descricoes sem embalagem:")
+                for desc in sem_embalagem[col_item_desc].head(3):
+                    self.logger.warning(f"    - {desc}")
+        
+        self.dados['custos'] = df_custo[['item', 'embalagem', 'custo_ytd']]
     
     def _carregar_demanda_historica(self):
         """Carrega demanda historica por SKU para restricoes de viabilidade."""
@@ -463,7 +533,8 @@ class ModeloOtimizacaoComRealocacao:
         # Juntar tudo
         df_base = df_comp.merge(df_estoque[['item', 'classe']], on='item', how='inner')
         df_base = df_base.merge(df_precos, on=['item', 'embalagem'], how='left')
-        df_base = df_base.merge(df_custos, on='item', how='inner')
+        # Custo por (item, embalagem), nao apenas por item
+        df_base = df_base.merge(df_custos, on=['item', 'embalagem'], how='left')
         
         # Preencher precos faltantes com media do SKU
         preco_medio_sku = df_precos.groupby('item')['preco'].mean()
@@ -473,6 +544,17 @@ class ModeloOtimizacaoComRealocacao:
         if df_base['preco'].isna().any():
             preco_medio_geral = df_precos['preco'].mean()
             df_base['preco'] = df_base['preco'].fillna(preco_medio_geral)
+        
+        # Preencher custos faltantes (se nao tiver custo para a combinacao especifica)
+        # Primeiro tentar media do SKU (todas as embalagens do mesmo SKU)
+        custo_medio_sku = df_custos.groupby('item')['custo_ytd'].mean()
+        df_base['custo_ytd'] = df_base['custo_ytd'].fillna(df_base['item'].map(custo_medio_sku))
+        
+        # Se ainda nao tiver custo, usar media geral
+        if df_base['custo_ytd'].isna().any():
+            custo_medio_geral = df_custos['custo_ytd'].mean()
+            df_base['custo_ytd'] = df_base['custo_ytd'].fillna(custo_medio_geral)
+            self.logger.warning(f"  {df_base['custo_ytd'].isna().sum()} combinacoes sem custo - usando custo medio")
         
         # Calcular margem unitaria
         df_base['margem_unitaria'] = df_base['preco'] - df_base['custo_ytd']

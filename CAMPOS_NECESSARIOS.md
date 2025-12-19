@@ -89,10 +89,12 @@ Este documento lista todos os campos (colunas) necessários em cada arquivo de i
 - `volume_total`: Volume total vendido (numeric)
 - `receita_total`: Receita total (numeric)
 - `descricao_item`: Descrição do item (string)
+  
 
 **Observações**:
 - O modelo aceita `preco`, `preco_ponderado` ou `preco_medio` como coluna de preço
 - Apenas combinações com preço > 0 são consideradas
+- Campo necessário granja para associar o preço a granja
 
 ---
 
@@ -109,6 +111,7 @@ Este documento lista todos os campos (colunas) necessários em cada arquivo de i
 - O custo é convertido de formato brasileiro para numérico (remove "R$", pontos e vírgulas)
 - Apenas SKUs com custo válido são considerados
 - O custo é por SKU, não varia por embalagem
+- Campo necessário granja para associar o preço a granja
 
 ---
 
