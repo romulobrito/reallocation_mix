@@ -7,11 +7,11 @@
 # ==============================================================================
 paths:
   # Arquivos de entrada (todos na pasta inputs/)
-  estoque: "inputs/manti_estoque.parquet"
+  # estoque: "inputs/manti_estoque.parquet"  # DEPRECADO: usar producao por classe
+  producao: "inputs/producao_classe.csv"  # Producao por classe de produtos
   classes: "inputs/base_skus_classes.xlsx"  # Classificacao de SKUs por classe
   pedidos: "inputs/pedidos_clientes.csv"  # Pedidos de clientes (pode ser parcial)
-  compatibilidade: "inputs/compatibilidade_sku_embalagem.csv"  # Histórico
-  # compatibilidade_tecnica: "inputs/compatibilidade_tecnica_sku_embalagem.csv"  # Técnica (opcional)
+  # compatibilidade: "inputs/compatibilidade_sku_embalagem.csv"  # DEPRECADO: item ja vem com embalagem
   precos: "inputs/precos_sku_embalagem.csv"
   custos: "inputs/CUSTO ITEM.csv"
   faturamento: "inputs/manti_fat_2024.parquet"  # Faturamento historico para calcular demanda
